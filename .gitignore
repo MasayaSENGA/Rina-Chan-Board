@@ -1,0 +1,39 @@
+# --- 機密情報（絶対にコミットしない） ---
+# Claude Code のログイン情報（アクセストークン・リフレッシュトークン）
+.credentials.json
+*.credentials.json
+*.rinari.tmp
+# 環境変数・秘密鍵
+.env
+.env.*
+*.pem
+*.key
+
+# --- 個人の利用データ ---
+# 会話ログや集計キャッシュ（通常はリポジトリ外の %LOCALAPPDATA%\Rinari に置かれる）
+*.jsonl
+stats-cache.json
+cache/
+
+# --- Claude Code / エディタのローカル設定 ---
+.claude/
+.vscode/
+.idea/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# --- OS ---
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# --- その他 ---
+*.log
+*.tmp
