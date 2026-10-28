@@ -1,12 +1,16 @@
+import hmac
 import json
 import mimetypes
 import os
+import secrets
 import socket
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, limits, stats
+from . import __version__, health, limits, notify, stats
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -56,6 +60,19 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/stats":
             self._json(stats.get(force=force))
             return
+        if url.path == "/api/health":
+            self._json({"issues": health.check(self.server.started_at, self.server.tray)})
+            return
+        if url.path == "/api/alerts":
+            if not self._token_ok():
+                self._send(403, b"Forbidden", "text/plain; charset=utf-8")
+                return
+            try:
+                after = int(parse_qs(url.query).get("after", ["0"])[0])
+            except ValueError:
+                after = 0
+            self._json({"alerts": notify.since(after), "last": notify.latest_id(), "summary": notify.summary()})
+            return
         if url.path == "/api/version":
             self._json({"version": __version__})
             return
@@ -68,6 +85,18 @@ class Handler(BaseHTTPRequestHandler):
         if ctype.startswith("text/") or ctype in ("application/javascript", "image/svg+xml"):
             ctype += "; charset=utf-8"
         self._send(200, path.read_bytes(), ctype)
+
+
+    def do_POST(self):
+        # 終了はトレイのアイコンからだけ受け付ける（ブラウザのページからは合言葉が分からないので送れない）
+        if not self._host_ok() or urlparse(self.path).path != "/api/shutdown" or not self._token_ok():
+            self._send(403, b"Forbidden", "text/plain; charset=utf-8")
+            return
+        self._json({"ok": True})
+        threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+    def _token_ok(self):
+        return hmac.compare_digest(self.headers.get("X-Rinari-Token") or "", self.server.token)
 
 
 class Server(ThreadingHTTPServer):
@@ -85,4 +114,7 @@ def serve(port):
     # 127.0.0.1 だけで待ち受ける（LAN の他の端末からは見えない）
     httpd = Server(("127.0.0.1", port), Handler)
     httpd.daemon_threads = True
+    httpd.token = secrets.token_urlsafe(32)  # トレイのアイコンとだけ共有する合言葉
+    httpd.started_at = time.time()
+    httpd.tray = None
     return httpd

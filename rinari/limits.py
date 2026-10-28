@@ -29,6 +29,8 @@ _cred_lock = threading.Lock()
 _cache_lock = threading.Lock()
 _history_lock = threading.Lock()
 _cache = {"at": 0.0, "data": None}
+_listeners = []          # 新しく取得するたびに結果を渡す先（通知など）
+_last_success = {"at": None}
 
 
 def _history_path():
@@ -92,6 +94,30 @@ def poll_forever():
         except Exception:
             pass
         time.sleep(POLL_SECONDS)
+
+
+def on_result(fn):
+    """新しく取得するたびに fn(result) を呼ぶ（キャッシュから返したときは呼ばない）"""
+    _listeners.append(fn)
+
+
+def last():
+    """直近の取得結果（まだ無ければ None）。取得しに行かない"""
+    return _cache["data"]
+
+
+def last_success_at():
+    return _last_success["at"]
+
+
+def login_expiry():
+    """ログイン（リフレッシュトークン）の期限（UNIX秒）。記録が無ければ None。トークン自体は返さない"""
+    try:
+        _, oauth = _read_credentials()
+    except LimitsError:
+        return None
+    ms = oauth.get("refreshTokenExpiresAt")
+    return int(ms) / 1000 if ms else None
 
 
 class LimitsError(Exception):
@@ -279,6 +305,12 @@ def fetch(force=False):
 
         if not result["error"]:
             _append_history(result)
+            _last_success["at"] = result["fetchedAt"]
+        for fn in _listeners:
+            try:
+                fn(result)
+            except Exception:
+                pass
 
         # エラー時は前回の値を残して表示を続ける
         if result["error"] and _cache["data"] and not _cache["data"].get("error"):

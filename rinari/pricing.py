@@ -48,3 +48,16 @@ def cost_usd(model, inp, out, cc5m, cc1h, cr, fast=False):
     pin, pout, pread = p
     usd = (inp * pin + out * pout + cc5m * pin * WRITE_5M + cc1h * pin * WRITE_1H + cr * pread) / 1_000_000
     return usd * FAST_MULTIPLIER if fast else usd
+
+
+def cache_savings_usd(model, inp, cc5m, cc1h, cr, fast=False):
+    """キャッシュを使わず毎回すべて入力として送った場合と比べて浮いた額（USD）。
+    読込が安くなった分から、作成時の割増し分を引いたもの。単価が分からないモデルは None"""
+    key, p = _lookup(model)
+    if p is None:
+        return None
+    if key == "claude-haiku-5-5" and inp + cc5m + cc1h + cr > HAIKU_5_5_LONG_THRESHOLD:
+        p = HAIKU_5_5_LONG
+    pin, _, pread = p
+    usd = (cr * (pin - pread) - cc5m * pin * (WRITE_5M - 1) - cc1h * pin * (WRITE_1H - 1)) / 1_000_000
+    return usd * FAST_MULTIPLIER if fast else usd

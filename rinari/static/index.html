@@ -16,24 +16,29 @@
     </div>
     <div class="topbar-right">
       <span class="muted" id="updated"></span>
+      <button type="button" class="btn" id="fold-all">すべて閉じる</button>
       <button type="button" class="btn" id="refresh">今すぐ更新</button>
     </div>
   </header>
 
   <main>
-    <section aria-labelledby="limits-title">
+    <ul class="health" id="health" hidden></ul>
+
+    <section data-fold="limits">
       <div class="section-head">
-        <h2 id="limits-title">利用上限</h2>
+        <h2><button type="button" class="fold">利用上限</button></h2>
       </div>
-      <p class="notice" id="limits-error" hidden></p>
-      <div class="limit-grid" id="limits"></div>
-      <p class="muted small" id="extra-usage" hidden></p>
-      <p class="muted small">推移のグラフは Rinari を起動している間に5分ごとに記録した値です。点線はこれまでのペースが続いた場合の予測です。</p>
+      <div class="fold-body">
+        <p class="notice" id="limits-error" hidden></p>
+        <div class="limit-grid" id="limits"></div>
+        <p class="muted small" id="extra-usage" hidden></p>
+        <p class="muted small">推移のグラフは Rinari を起動している間に5分ごとに記録した値です。点線はこれまでのペースが続いた場合の予測です。「この枠で使ったモデル」は会話ログの料金換算で、枠の減り方の目安です。</p>
+      </div>
     </section>
 
-    <section aria-labelledby="models-title">
+    <section data-fold="models">
       <div class="section-head">
-        <h2 id="models-title">モデル別の使用割合</h2>
+        <h2><button type="button" class="fold">モデル別の使用割合</button></h2>
         <div class="filters">
           <div class="seg" role="group" aria-label="期間" id="period">
             <button type="button" data-v="1">今日</button>
@@ -47,61 +52,159 @@
             <button type="button" data-v="messages">応答数</button>
             <button type="button" data-v="cost">料金換算</button>
           </div>
+          <button type="button" class="btn" id="export-rows">CSV</button>
         </div>
       </div>
-      <p class="muted small">Claude Code（デスクトップアプリの Code タブを含む）の会話ログから集計しています。claude.ai の通常チャットは含みません。料金換算は同じ量を API で使った場合の目安（USD）で、実際の請求額ではありません。</p>
+      <div class="fold-body">
+        <p class="muted small">Claude Code（デスクトップアプリの Code タブを含む）の会話ログから集計しています。claude.ai の通常チャットは含みません。料金換算は同じ量を API で使った場合の目安（USD）で、実際の請求額ではありません。CSV は選んでいる期間の日別・モデル別・プロジェクト別の集計です。</p>
 
-      <div class="card">
-        <div class="stat-row" id="stat-row"></div>
-        <div class="share-bar" id="share-bar" role="img"></div>
-        <div class="legend" id="legend"></div>
-      </div>
+        <div class="card" data-fold="summary">
+          <h3><button type="button" class="fold">まとめ</button></h3>
+          <div class="fold-body">
+            <div class="stat-row" id="stat-row"></div>
+            <div class="share-bar" id="share-bar" role="img"></div>
+            <div class="legend" id="legend"></div>
+          </div>
+        </div>
 
-      <div class="card">
-        <h3>日別の推移</h3>
-        <div class="chart" id="daily"></div>
-      </div>
+        <div class="card" data-fold="daily">
+          <h3><button type="button" class="fold">日別の推移</button></h3>
+          <div class="fold-body">
+            <div class="chart" id="daily"></div>
+          </div>
+        </div>
 
-      <div class="card">
-        <h3>曜日と時間帯</h3>
-        <div class="heatmap" id="heatmap"></div>
-      </div>
+        <div class="card" data-fold="heatmap">
+          <h3><button type="button" class="fold">曜日と時間帯</button></h3>
+          <div class="fold-body">
+            <div class="heatmap" id="heatmap"></div>
+          </div>
+        </div>
 
-      <div class="card">
-        <h3>モデル別の内訳</h3>
-        <div class="table-wrap">
-          <table id="model-table">
-            <thead>
-              <tr>
-                <th scope="col">モデル</th>
-                <th scope="col" class="num">応答数</th>
-                <th scope="col" class="num">入力</th>
-                <th scope="col" class="num">出力</th>
-                <th scope="col" class="num">キャッシュ作成</th>
-                <th scope="col" class="num">キャッシュ読込</th>
-                <th scope="col" class="num">料金換算</th>
-                <th scope="col" class="num">割合</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <div class="card" data-fold="cache">
+          <h3><button type="button" class="fold">キャッシュの効率</button></h3>
+          <div class="fold-body">
+            <div class="stat-row" id="cache-stats"></div>
+            <div class="table-wrap">
+              <table id="cache-table">
+                <thead>
+                  <tr>
+                    <th scope="col">モデル</th>
+                    <th scope="col">キャッシュ読込率</th>
+                    <th scope="col" class="num">入力</th>
+                    <th scope="col" class="num">キャッシュ作成</th>
+                    <th scope="col" class="num">キャッシュ読込</th>
+                    <th scope="col" class="num">節約額</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <p class="muted small">キャッシュ読込率は、モデルに渡した入力のうちキャッシュから読んだ割合です。節約額は、キャッシュを使わず毎回すべて入力として送った場合との差（作成時の割増しを差し引いた額）です。</p>
+          </div>
+        </div>
+
+        <div class="card" data-fold="model-table">
+          <h3><button type="button" class="fold">モデル別の内訳</button></h3>
+          <div class="fold-body">
+            <div class="table-wrap">
+              <table id="model-table">
+                <thead>
+                  <tr>
+                    <th scope="col">モデル</th>
+                    <th scope="col" class="num">応答数</th>
+                    <th scope="col" class="num">入力</th>
+                    <th scope="col" class="num">出力</th>
+                    <th scope="col" class="num">キャッシュ作成</th>
+                    <th scope="col" class="num">キャッシュ読込</th>
+                    <th scope="col" class="num">料金換算</th>
+                    <th scope="col" class="num">割合</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" data-fold="projects">
+          <h3><button type="button" class="fold">プロジェクト別</button></h3>
+          <div class="fold-body">
+            <div class="table-wrap">
+              <table id="project-table">
+                <thead>
+                  <tr>
+                    <th scope="col">プロジェクト</th>
+                    <th scope="col">モデルの内訳</th>
+                    <th scope="col" class="num">応答数</th>
+                    <th scope="col" class="num" id="project-metric-head">全トークン</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" data-fold="sessions">
+          <div class="card-head">
+            <h3><button type="button" class="fold">会話別</button></h3>
+            <button type="button" class="btn btn-small" id="export-sessions">CSV</button>
+          </div>
+          <div class="fold-body">
+            <div class="table-wrap">
+              <table id="session-table">
+                <thead>
+                  <tr>
+                    <th scope="col">会話</th>
+                    <th scope="col">モデルの内訳</th>
+                    <th scope="col" class="num">最終</th>
+                    <th scope="col" class="num">応答数</th>
+                    <th scope="col" class="num" id="session-metric-head">全トークン</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <p class="muted small" id="session-note"></p>
+          </div>
         </div>
       </div>
+    </section>
 
-      <div class="card">
-        <h3>プロジェクト別</h3>
-        <div class="table-wrap">
-          <table id="project-table">
-            <thead>
-              <tr>
-                <th scope="col">プロジェクト</th>
-                <th scope="col">モデルの内訳</th>
-                <th scope="col" class="num">応答数</th>
-                <th scope="col" class="num" id="project-metric-head">全トークン</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+    <section data-fold="review">
+      <div class="section-head">
+        <h2><button type="button" class="fold">振り返り</button></h2>
+      </div>
+      <div class="fold-body">
+        <p class="muted small">期間の切り替えに関係なく、すべての記録から集計します。値は上の「集計する値」に合わせます。週は日曜日始まりです。</p>
+        <div class="card" data-fold="compare">
+          <h3><button type="button" class="fold">前の期間との比較</button></h3>
+          <div class="fold-body">
+            <div class="table-wrap">
+              <table id="compare-table">
+                <thead>
+                  <tr>
+                    <th scope="col">期間</th>
+                    <th scope="col" class="num">料金換算</th>
+                    <th scope="col" class="num">応答数</th>
+                    <th scope="col" class="num">全トークン</th>
+                    <th scope="col" class="num" id="compare-metric-head">前の期間比</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <p class="muted small">「今週」「今月」は、先週・先月の同じ日数（今日の分まで）と比べています。</p>
+          </div>
+        </div>
+        <div class="card" data-fold="weekly">
+          <h3><button type="button" class="fold">週ごと（直近12週）</button></h3>
+          <div class="fold-body"><div class="table-wrap"><table class="bars-table" id="weekly-table"><tbody></tbody></table></div></div>
+        </div>
+        <div class="card" data-fold="monthly">
+          <h3><button type="button" class="fold">月ごと（直近12か月）</button></h3>
+          <div class="fold-body"><div class="table-wrap"><table class="bars-table" id="monthly-table"><tbody></tbody></table></div></div>
         </div>
       </div>
     </section>

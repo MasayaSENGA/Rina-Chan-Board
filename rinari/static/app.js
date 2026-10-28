@@ -166,11 +166,14 @@ function renderLimits() {
       card.append(el("div", { class: "forecast" + (trend.hits ? " critical" : "") },
         el("span", { class: "forecast-main", text: trend.text }), el("span", { class: "muted", text: trend.basis })));
     }
+    const usage = windowModels(item, data.fetchedAt);
+    if (usage) card.append(usage);
     if (item.active) {
       card.append(el("span", { class: "badge active", text: "いま一番効いている枠" }));
     }
     box.append(card);
   }
+  updateTitle(data);
   if (!data.error && !(data.limits || []).length) {
     box.append(el("p", { class: "empty", text: "利用上限の情報がありません" }));
   }
@@ -181,6 +184,62 @@ function renderLimits() {
     $("extra-usage").textContent = `追加使用量: ${ex.usedCredits ?? 0} / ${ex.monthlyLimit} ${ex.currency || ""}`;
   }
   updateStamp();
+}
+
+// タブのタイトルに 5時間枠の使用率とリセットまでの時間を出す（タブを見るだけで分かるように）
+function updateTitle(data) {
+  const s = (data.limits || []).find((x) => x.kind === "session") || (data.limits || [])[0];
+  if (!s || data.error && !data.stale) {
+    document.title = "Rinari";
+    return;
+  }
+  let left = "";
+  if (s.resetsAt) {
+    const m = Math.max(0, Math.round((Date.parse(s.resetsAt) - Date.now()) / 60000));
+    left = m >= 1440 ? `・あと${Math.floor(m / 1440)}日` : `・あと${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+  }
+  document.title = `${Math.round(s.percent)}%${left} | Rinari`;
+}
+
+// 枠の期間（始まり〜今）に会話ログで使ったモデルの内訳（料金換算）
+function windowModels(item, fetchedAt) {
+  if (!item.resetsAt || !fetchedAt || !state.stats?.hours) return null;
+  const reset = Date.parse(item.resetsAt);
+  const start = reset - windowLength(item);
+  const now = fetchedAt * 1000;
+  // モデル別の週間枠（例: 週間（Fable））はそのモデルだけを数える
+  const only = /^週間（(.+)）$/.exec(item.label)?.[1];
+  const onlyModel = only && only !== "全モデル" ? only.toLowerCase() : null;
+  const byModel = new Map();
+  let cost = 0;
+  for (const r of state.stats.hours) {
+    const t = new Date(`${r[0]}T${String(r[1]).padStart(2, "0")}:00:00`).getTime();
+    if (t + HOUR <= start || t > now) continue;
+    if (onlyModel && !modelLabel(r[2]).toLowerCase().startsWith(onlyModel)) continue;
+    const k = seriesKey(r[2]);
+    byModel.set(k, (byModel.get(k) || 0) + r[8]);
+    cost += r[8];
+  }
+  if (!cost) return null;
+  const bar = el("div", { class: "mini-bar wide" });
+  const parts = [];
+  for (const id of seriesOrder(byModel.keys())) {
+    const v = byModel.get(id);
+    if (!v) continue;
+    const s = el("span");
+    s.style.flex = `${v} 0 0`;
+    s.style.background = colorVar(id);
+    bar.append(s);
+    parts.push([id, modelLabel(id), `${pct((v / cost) * 100)}（${usd(v)}）`]);
+  }
+  bar.addEventListener("mousemove", (e) => showTip(e, "この枠で使ったモデル", parts, usd(cost)));
+  bar.addEventListener("mouseleave", hideTip);
+  const top = parts.slice(0, 2).map(([, label, v]) => `${label} ${v.split("（")[0]}`).join("・");
+  const per = item.percent >= 1 ? `・1% あたり約 ${usd(cost / item.percent)}` : "";
+  return el("div", { class: "window-models" },
+    el("div", { class: "small muted", text: `この枠で使ったモデル: ${usd(cost)} 相当${per}` }),
+    bar,
+    el("div", { class: "small", text: top }));
 }
 
 // ---------- 利用上限の推移と予測 ----------
@@ -357,7 +416,12 @@ function renderStats() {
   renderModelTable(models, byModel, val, total);
   renderDaily(rows, metric);
   renderHeatmap(metric);
+  renderCache(rows);
   renderProjects(rows, metric);
+  renderSessions(metric);
+  renderReview(metric);
+  // 利用上限のカードにある「この枠で使ったモデル」は会話ログの集計を使う
+  if (state.limits) renderLimits();
   updateStamp();
 }
 
@@ -543,18 +607,18 @@ function roundedTop(x, y, w, h, r) {
   return `M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h} Z`;
 }
 
-const WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"];
+const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
 const HEAT_STEPS = 6;
 
 function renderHeatmap(metric) {
   const box = $("heatmap");
   box.replaceChildren();
   const from = periodStart();
-  // grid[曜日(月=0)][時]。時間帯の行は [日付, 時, "", 応答数, …] で、値の位置は日別の行と同じ
+  // grid[曜日(日=0)][時]。時間帯の行は [日付, 時, モデル, 応答数, …] で、値の位置は日別の行と同じ
   const grid = WEEKDAYS.map(() => Array(24).fill(0));
   for (const r of state.stats?.hours || []) {
     if (from && r[0] < from) continue;
-    const wd = (new Date(r[0] + "T00:00:00").getDay() + 6) % 7;
+    const wd = new Date(r[0] + "T00:00:00").getDay();
     grid[wd][r[1]] += valueOf(r, metric);
   }
   const max = Math.max(0, ...grid.flat());
@@ -620,6 +684,315 @@ function renderProjects(rows, metric) {
   if (!list.length) tbody.append(el("tr", {}, el("td", { colspan: "4", class: "empty", text: "データなし" })));
 }
 
+function modelBar(models, total) {
+  // models: Map(モデル -> 値)。「その他」にまとめてから割合のバーにする
+  const merged = new Map();
+  for (const [id, v] of models) merged.set(seriesKey(id), (merged.get(seriesKey(id)) || 0) + v);
+  const bar = el("div", { class: "mini-bar" });
+  const parts = [];
+  for (const id of seriesOrder(merged.keys())) {
+    const v = merged.get(id);
+    if (!v) continue;
+    const s = el("span");
+    s.style.flex = `${v} 0 0`;
+    s.style.background = colorVar(id);
+    bar.append(s);
+    parts.push([id, modelLabel(id), pct((v / total) * 100)]);
+  }
+  return { bar, parts };
+}
+
+// ---------- キャッシュの効率 ----------
+
+function renderCache(rows) {
+  const byModel = new Map();
+  const sum = [0, 0, 0, 0, 0];
+  for (const r of rows) {
+    const k = seriesKey(r[1]);
+    const m = byModel.get(k) || [0, 0, 0, 0];
+    m[0] += r[4]; m[1] += r[6]; m[2] += r[7]; m[3] += r[9] || 0;
+    byModel.set(k, m);
+    sum[0] += r[4]; sum[1] += r[6]; sum[2] += r[7]; sum[3] += r[9] || 0; sum[4] += r[8];
+  }
+  const rate = (m) => (m[0] + m[1] + m[2] ? (m[2] / (m[0] + m[1] + m[2])) * 100 : 0);
+  const stats = $("cache-stats");
+  stats.replaceChildren();
+  for (const [label, value] of [
+    ["キャッシュ読込率", pct(rate(sum))],
+    ["節約額", usd(sum[3])],
+    ["キャッシュなしの場合", usd(sum[4] + sum[3])],
+    ["実際（料金換算）", usd(sum[4])],
+  ]) {
+    stats.append(el("div", { class: "stat" }, el("div", { class: "stat-label", text: label }), el("div", { class: "stat-value", text: value })));
+  }
+  const tbody = $("cache-table").tBodies[0];
+  tbody.replaceChildren();
+  const models = seriesOrder(byModel.keys());
+  for (const id of models) {
+    const m = byModel.get(id);
+    const sw = el("span", { class: "swatch" });
+    sw.style.background = colorVar(id);
+    const fill = el("span");
+    fill.style.width = rate(m) + "%";
+    tbody.append(el("tr", {},
+      el("td", {}, el("span", { class: "cell-model" }, sw, modelLabel(id))),
+      el("td", {}, el("span", { class: "rate" }, el("span", { class: "meter small-meter" }, fill), pct(rate(m)))),
+      el("td", { class: "num", text: compact(m[0]) }),
+      el("td", { class: "num", text: compact(m[1]) }),
+      el("td", { class: "num", text: compact(m[2]) }),
+      el("td", { class: "num", text: usd(m[3]) }),
+    ));
+  }
+  if (!models.length) tbody.append(el("tr", {}, el("td", { colspan: "6", class: "empty", text: "データなし" })));
+}
+
+// ---------- 会話別 ----------
+
+const SESSION_LIMIT = 20;
+
+function sessionValue(models, metric) {
+  // models: { モデル: [応答数, 入力, 出力, キャッシュ作成, キャッシュ読込, 料金換算, 節約] }
+  let v = 0;
+  for (const m of Object.values(models)) v += valueOf([null, null, null, ...m], metric);
+  return v;
+}
+
+function filteredSessions() {
+  const from = periodStart();
+  const fromMs = from ? new Date(from + "T00:00:00").getTime() : 0;
+  return (state.stats?.sessions || []).filter((s) => s[4] * 1000 >= fromMs);
+}
+
+function renderSessions(metric) {
+  $("session-metric-head").textContent = METRIC_LABEL[metric];
+  const list = filteredSessions()
+    .map((s) => ({ s, v: sessionValue(s[5], metric), msgs: sessionValue(s[5], "messages") }))
+    .sort((a, b) => b.v - a.v);
+  const tbody = $("session-table").tBodies[0];
+  tbody.replaceChildren();
+  for (const { s, v, msgs } of list.slice(0, SESSION_LIMIT)) {
+    const [, project, title, , last, models] = s;
+    const per = new Map(Object.entries(models).map(([id, m]) => [id, valueOf([null, null, null, ...m], metric)]));
+    const { bar, parts } = modelBar(per, v || 1);
+    const name = title || "（無題）";
+    bar.addEventListener("mousemove", (e) => showTip(e, name, parts));
+    bar.addEventListener("mouseleave", hideTip);
+    tbody.append(el("tr", {},
+      el("td", { class: "cell-session" }, el("span", { class: "session-title", text: name, title: name }),
+        el("span", { class: "muted small", text: project })),
+      el("td", {}, bar),
+      el("td", { class: "num", text: fmtDateTime(new Date(last * 1000)) }),
+      el("td", { class: "num", text: nf.format(msgs) }),
+      el("td", { class: "num", text: fmtMetric(v) }),
+    ));
+  }
+  if (!list.length) tbody.append(el("tr", {}, el("td", { colspan: "5", class: "empty", text: "データなし" })));
+  $("session-note").textContent = list.length > SESSION_LIMIT
+    ? `この期間に使った ${nf.format(list.length)} 件の会話のうち、上位 ${SESSION_LIMIT} 件です。値は会話全体の合計です（期間より前の分も含みます）。`
+    : "値は会話全体の合計です（期間より前の分も含みます）。";
+}
+
+// ---------- 振り返り ----------
+
+function sumRange(rows, from, to) {
+  // from 以上 to 以下の日付（YYYY-MM-DD）の合計 [料金換算, 応答数, 全トークン, 選んだ値]
+  const out = [0, 0, 0, 0];
+  for (const r of rows) {
+    if (r[0] < from || r[0] > to) continue;
+    out[0] += r[8];
+    out[1] += r[3];
+    out[2] += r[4] + r[5] + r[6] + r[7];
+    out[3] += valueOf(r, state.metric);
+  }
+  return out;
+}
+
+function addDays(d, n) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
+function change(cur, prev) {
+  if (!prev) return cur ? "新規" : "-";
+  const c = ((cur - prev) / prev) * 100;
+  return (c >= 0 ? "+" : "") + (Math.abs(c) < 10 ? c.toFixed(1) : Math.round(c)) + "%";
+}
+
+function renderReview(metric) {
+  const rows = state.stats?.rows || [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const wd = today.getDay();
+  const weekStart = addDays(today, -wd);
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const prevMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  // 先月の「今日と同じ日」。先月が短いときは月末で止める
+  const prevMonthSameDay = new Date(Math.min(
+    new Date(prevMonthStart.getFullYear(), prevMonthStart.getMonth(), today.getDate()).getTime(),
+    addDays(monthStart, -1).getTime()));
+  const D = localDate;
+  const periods = [
+    ["今週（日曜〜今日）", sumRange(rows, D(weekStart), D(today)), sumRange(rows, D(addDays(weekStart, -7)), D(addDays(today, -7)))],
+    ["先週", sumRange(rows, D(addDays(weekStart, -7)), D(addDays(weekStart, -1))), sumRange(rows, D(addDays(weekStart, -14)), D(addDays(weekStart, -8)))],
+    ["今月（1日〜今日）", sumRange(rows, D(monthStart), D(today)), sumRange(rows, D(prevMonthStart), D(prevMonthSameDay))],
+    ["先月", sumRange(rows, D(prevMonthStart), D(addDays(monthStart, -1))),
+      sumRange(rows, D(new Date(today.getFullYear(), today.getMonth() - 2, 1)), D(addDays(prevMonthStart, -1)))],
+  ];
+  $("compare-metric-head").textContent = `前の期間比（${METRIC_LABEL[metric]}）`;
+  const tbody = $("compare-table").tBodies[0];
+  tbody.replaceChildren();
+  for (const [label, cur, prev] of periods) {
+    tbody.append(el("tr", {},
+      el("td", { text: label }),
+      el("td", { class: "num", text: usd(cur[0]) }),
+      el("td", { class: "num", text: nf.format(cur[1]) }),
+      el("td", { class: "num", text: compact(cur[2]) }),
+      el("td", { class: "num", text: change(cur[3], prev[3]) }),
+    ));
+  }
+
+  const weeks = [];
+  for (let i = 11; i >= 0; i--) {
+    const s = addDays(weekStart, -7 * i);
+    const e = addDays(s, 6);
+    weeks.push([`${s.getMonth() + 1}/${s.getDate()}〜${e.getMonth() + 1}/${e.getDate()}`, sumRange(rows, D(s), D(e))[3]]);
+  }
+  renderBars("weekly-table", weeks, "前週比");
+  const months = [];
+  for (let i = 11; i >= 0; i--) {
+    const s = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    const e = new Date(today.getFullYear(), today.getMonth() - i + 1, 0);
+    months.push([`${s.getFullYear()}/${s.getMonth() + 1}`, sumRange(rows, D(s), D(e))[3]]);
+  }
+  renderBars("monthly-table", months, "前月比");
+}
+
+function renderBars(id, items, changeLabel) {
+  const tbody = $(id).tBodies[0];
+  tbody.replaceChildren();
+  const max = Math.max(0, ...items.map((x) => x[1]));
+  // 記録が始まる前の空の期間は出さない
+  const firstUsed = items.findIndex((x) => x[1] > 0);
+  if (firstUsed < 0) {
+    tbody.append(el("tr", {}, el("td", { class: "empty", text: "データなし" })));
+    return;
+  }
+  items.forEach(([label, v], i) => {
+    if (i < firstUsed) return;
+    const fill = el("span");
+    fill.style.width = (max ? (v / max) * 100 : 0) + "%";
+    tbody.append(el("tr", {},
+      el("td", { text: label }),
+      el("td", { class: "bar-cell" }, el("span", { class: "hbar" }, fill)),
+      el("td", { class: "num", text: fmtMetric(v) }),
+      el("td", { class: "num muted", text: i > firstUsed ? `${changeLabel} ${change(v, items[i - 1][1])}` : "" }),
+    ));
+  });
+}
+
+// ---------- CSV ----------
+
+function csvCell(v) {
+  const s = v == null ? "" : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadCsv(name, header, lines) {
+  // Excel で文字化けしないよう BOM を付ける
+  const text = "﻿" + [header, ...lines].map((l) => l.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+  const a = el("a", { href: url, download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function periodSuffix() {
+  const from = periodStart();
+  return (from ? from : "all") + "_" + localDate(new Date());
+}
+
+$("export-rows").addEventListener("click", () => {
+  downloadCsv(`rinari-usage_${periodSuffix()}.csv`,
+    ["日付", "モデル", "プロジェクト", "応答数", "入力", "出力", "キャッシュ作成", "キャッシュ読込", "料金換算USD", "キャッシュ節約USD"],
+    filteredRows());
+});
+
+$("export-sessions").addEventListener("click", () => {
+  const lines = [];
+  for (const [id, project, title, first, last, models] of filteredSessions()) {
+    for (const [model, m] of Object.entries(models)) {
+      lines.push([id, project, title || "", fmtIso(first), fmtIso(last), model, ...m]);
+    }
+  }
+  downloadCsv(`rinari-sessions_${periodSuffix()}.csv`,
+    ["会話ID", "プロジェクト", "タイトル", "開始", "最終", "モデル", "応答数", "入力", "出力", "キャッシュ作成", "キャッシュ読込", "料金換算USD", "キャッシュ節約USD"],
+    lines);
+});
+
+function fmtIso(sec) {
+  const d = new Date(sec * 1000);
+  return `${localDate(d)} ${fmtTime(d).padStart(5, "0")}`;
+}
+
+// ---------- 動作状態 ----------
+
+const HEALTH_TEXT = { critical: "問題", warning: "注意", info: "お知らせ" };
+
+async function loadHealth() {
+  let issues;
+  try {
+    issues = (await (await fetch("/api/health")).json()).issues || [];
+  } catch (e) {
+    issues = [{ level: "critical", text: "Rinari のサーバーに接続できません（起動しているか確認してください）" }];
+  }
+  const box = $("health");
+  box.replaceChildren(...issues.map((x) =>
+    el("li", { class: "health-item " + x.level }, el("strong", { text: HEALTH_TEXT[x.level] || "" }), el("span", { text: x.text }))));
+  box.hidden = !issues.length;
+}
+
+// ---------- 開閉 ----------
+
+function setFold(box, open) {
+  box.classList.toggle("folded", !open);
+  box.querySelector(".fold").setAttribute("aria-expanded", String(open));
+  box.querySelector(":scope > .fold-body").hidden = !open;
+}
+
+function initFolds() {
+  const boxes = [...document.querySelectorAll("[data-fold]")];
+  for (const box of boxes) {
+    const key = "rinari.fold." + box.dataset.fold;
+    const body = box.querySelector(":scope > .fold-body");
+    body.id = "fold-" + box.dataset.fold;
+    box.querySelector(".fold").setAttribute("aria-controls", body.id);
+    let saved = null;
+    try { saved = localStorage.getItem(key); } catch (_) {}
+    setFold(box, saved !== "0");
+    box.querySelector(".fold").addEventListener("click", () => {
+      const open = box.classList.contains("folded");
+      setFold(box, open);
+      try { localStorage.setItem(key, open ? "1" : "0"); } catch (_) {}
+      syncFoldAll();
+    });
+  }
+  const syncFoldAll = () => {
+    $("fold-all").textContent = boxes.every((b) => b.classList.contains("folded")) ? "すべて開く" : "すべて閉じる";
+  };
+  $("fold-all").addEventListener("click", () => {
+    const open = boxes.every((b) => b.classList.contains("folded"));
+    for (const box of boxes) {
+      setFold(box, open);
+      try { localStorage.setItem("rinari.fold." + box.dataset.fold, open ? "1" : "0"); } catch (_) {}
+    }
+    syncFoldAll();
+  });
+  syncFoldAll();
+}
+
 // ---------- ツールチップ ----------
 
 function showTip(e, title, lines, total = null) {
@@ -681,13 +1054,16 @@ $("refresh").addEventListener("click", async () => {
   const btn = $("refresh");
   btn.disabled = true;
   await Promise.all([loadLimits(true), loadStats(true)]);
+  await loadHealth();
   btn.disabled = false;
 });
 
+initFolds();
 renderStats();
-loadLimits();
+loadLimits().then(loadHealth);
 loadStats();
 setInterval(loadLimits, LIMITS_INTERVAL_MS);
 setInterval(loadStats, STATS_INTERVAL_MS);
+setInterval(loadHealth, 60 * 1000);
 // リセットまでの残り時間の表示を進める
 setInterval(() => state.limits && renderLimits(), 60 * 1000);

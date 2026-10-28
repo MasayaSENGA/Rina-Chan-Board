@@ -3,7 +3,7 @@ import sys
 import threading
 import webbrowser
 
-from . import __version__, limits, stats
+from . import __version__, limits, stats, tray
 from .server import serve
 
 
@@ -11,6 +11,7 @@ def main():
     ap = argparse.ArgumentParser(prog="rinari", description="Claude の利用上限とモデル別の使用割合を表示するローカルダッシュボード")
     ap.add_argument("--port", type=int, default=8765, help="待ち受けるポート（既定: 8765）")
     ap.add_argument("--no-browser", action="store_true", help="起動時にブラウザを開かない")
+    ap.add_argument("--no-tray", action="store_true", help="タスクトレイのアイコン（と通知）を出さない")
     args = ap.parse_args()
 
     url = f"http://127.0.0.1:{args.port}/"
@@ -20,11 +21,13 @@ def main():
         print(f"ポート {args.port} は使用中です。Rinari がすでに起動していれば {url} を開いてください。"
               "別のポートで起動するときは --port を指定してください。")
         sys.exit(1)
-    print(f"Rinari {__version__}: {url}  （終了は Ctrl+C）")
+    print(f"Rinari {__version__}: {url}  （終了は Ctrl+C か、タスクトレイのアイコンから）")
     # 初回の集計は時間がかかるので先に始めておく
     threading.Thread(target=stats.get, daemon=True).start()
     # 画面を開いていなくても利用上限の推移を記録する
     threading.Thread(target=limits.poll_forever, daemon=True).start()
+    if not args.no_tray:
+        httpd.tray = tray.start(args.port, httpd.token)
     if not args.no_browser:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:
@@ -33,6 +36,8 @@ def main():
         pass
     finally:
         httpd.server_close()
+        if httpd.tray and httpd.tray.poll() is None:
+            httpd.tray.terminate()
 
 
 if __name__ == "__main__":

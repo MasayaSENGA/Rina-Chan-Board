@@ -12,9 +12,9 @@ from datetime import datetime
 from pathlib import Path
 
 from .paths import cache_dir, projects_dir
-from .pricing import cost_usd
+from .pricing import cache_savings_usd, cost_usd
 
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 MIN_RESCAN_SECONDS = 30  # 通常の読み直し間隔の下限
 FORCE_MIN_SECONDS = 5    # 「今すぐ更新」でもこれより短い間隔では読み直さない
 
@@ -43,12 +43,39 @@ def _save_cache(files):
     tmp.replace(path)
 
 
+def _user_text(m):
+    """ユーザー発言の本文。コマンドやシステムが差し込んだもの（< で始まる）は除く"""
+    c = m.get("content") if isinstance(m, dict) else None
+    if isinstance(c, list):
+        c = next((x.get("text") for x in c if isinstance(x, dict) and x.get("type") == "text"), None)
+    if not isinstance(c, str):
+        return None
+    c = " ".join(c.split())
+    return c if c and not c.startswith("<") else None
+
+
 def _parse_file(path: Path):
     """1ファイルから応答ごとの [id, 時刻(UNIX秒), モデル, プロジェクト, 入力, 出力,
-    キャッシュ作成(5分), キャッシュ作成(1時間), キャッシュ読込, fastモード] を取り出す"""
+    キャッシュ作成(5分), キャッシュ作成(1時間), キャッシュ読込, fastモード, セッションID] と、
+    会話のタイトル（名前を付けていればその名前、無ければ最初の発言）を取り出す"""
     records = []
+    title = first_prompt = None
     with open(path, encoding="utf-8", errors="ignore") as f:
         for line in f:
+            if '"custom-title"' in line:
+                try:
+                    title = json.loads(line).get("customTitle") or title
+                except ValueError:
+                    pass
+                continue
+            if first_prompt is None and '"user"' in line:
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if d.get("type") == "user" and not d.get("isMeta"):
+                    first_prompt = _user_text(d.get("message"))
+                continue
             if '"usage"' not in line or '"assistant"' not in line:
                 continue
             try:
@@ -79,8 +106,10 @@ def _parse_file(path: Path):
                 int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0),
                 cc5m, cc1h, int(u.get("cache_read_input_tokens") or 0),
                 1 if u.get("speed") == "fast" else 0,
+                d.get("sessionId") or path.stem,
             ])
-    return records
+    title = title or first_prompt
+    return records, (title[:80] if title else None)
 
 
 def _scan():
@@ -99,10 +128,10 @@ def _scan():
                 files[key] = c
                 continue
             try:
-                recs = _parse_file(p)
+                recs, title = _parse_file(p)
             except OSError:
                 continue
-            files[key] = {"mtime": st.st_mtime, "size": st.st_size, "records": recs}
+            files[key] = {"mtime": st.st_mtime, "size": st.st_size, "records": recs, "title": title}
             changed = True
     if changed or len(files) != len(cached):
         try:
@@ -116,13 +145,14 @@ def _scan():
 def _aggregate(files):
     # 同じ応答が複数行・複数ファイル（再開したセッションなど）に出るので id で重複を除く
     seen = set()
-    # (日付, モデル, プロジェクト) / (日付, 時) -> [応答数, 入力, 出力, キャッシュ作成, キャッシュ読込, 料金換算USD]
-    rows = defaultdict(lambda: [0, 0, 0, 0, 0, 0.0])
-    hours = defaultdict(lambda: [0, 0, 0, 0, 0, 0.0])
+    # 値はどれも [応答数, 入力, 出力, キャッシュ作成, キャッシュ読込, 料金換算USD, キャッシュによる節約USD]
+    rows = defaultdict(lambda: [0, 0, 0, 0, 0, 0.0, 0.0])    # (日付, モデル, プロジェクト)
+    hours = defaultdict(lambda: [0, 0, 0, 0, 0, 0.0, 0.0])   # (日付, 時, モデル)
+    sessions = {}  # セッションID -> {プロジェクト, タイトル, 最初, 最後, モデル -> 値}
     unpriced = set()
     first = last = None
     for f in files.values():
-        for rid, ts, model, project, i, o, cc5m, cc1h, cr, fast in f["records"]:
+        for rid, ts, model, project, i, o, cc5m, cc1h, cr, fast, sid in f["records"]:
             if rid in seen:
                 continue
             seen.add(rid)
@@ -130,25 +160,45 @@ def _aggregate(files):
             if usd is None:
                 unpriced.add(model)
                 usd = 0.0
+            saved = cache_savings_usd(model, i, cc5m, cc1h, cr, bool(fast)) or 0.0
             dt = datetime.fromtimestamp(ts)  # このPCのタイムゾーンで日付と時刻を切る
             day = dt.strftime("%Y-%m-%d")
-            for r in (rows[(day, model, project)], hours[(day, dt.hour)]):
+            s = sessions.get(sid)
+            if s is None:
+                s = sessions[sid] = {"project": project, "title": None, "first": ts, "last": ts,
+                                     "models": defaultdict(lambda: [0, 0, 0, 0, 0, 0.0, 0.0])}
+            s["title"] = s["title"] or f.get("title")
+            s["first"], s["last"] = min(s["first"], ts), max(s["last"], ts)
+            for r in (rows[(day, model, project)], hours[(day, dt.hour, model)], s["models"][model]):
                 r[0] += 1
                 r[1] += i
                 r[2] += o
                 r[3] += cc5m + cc1h
                 r[4] += cr
                 r[5] += usd
+                r[6] += saved
             first = ts if first is None or ts < first else first
             last = ts if last is None or ts > last else last
+
+    def vals(v):
+        return [*v[:5], round(v[5], 6), round(v[6], 6)]
+
     return {
         "generatedAt": time.time(),
         "firstAt": first,
         "lastAt": last,
-        "fields": ["date", "model", "project", "messages", "input", "output", "cacheCreate", "cacheRead", "costUsd"],
-        "rows": [[d, m, p, *v[:5], round(v[5], 6)] for (d, m, p), v in sorted(rows.items())],
-        "hourFields": ["date", "hour", "", "messages", "input", "output", "cacheCreate", "cacheRead", "costUsd"],
-        "hours": [[d, h, "", *v[:5], round(v[5], 6)] for (d, h), v in sorted(hours.items())],
+        "fields": ["date", "model", "project", "messages", "input", "output", "cacheCreate", "cacheRead",
+                   "costUsd", "cacheSavedUsd"],
+        "rows": [[d, m, p, *vals(v)] for (d, m, p), v in sorted(rows.items())],
+        "hourFields": ["date", "hour", "model", "messages", "input", "output", "cacheCreate", "cacheRead",
+                       "costUsd", "cacheSavedUsd"],
+        "hours": [[d, h, m, *vals(v)] for (d, h, m), v in sorted(hours.items())],
+        "sessionFields": ["id", "project", "title", "firstAt", "lastAt", "models"],
+        "sessions": [
+            [sid, s["project"], s["title"], round(s["first"]), round(s["last"]),
+             {m: vals(v) for m, v in s["models"].items()}]
+            for sid, s in sorted(sessions.items(), key=lambda kv: -kv[1]["last"])
+        ],
         "unpricedModels": sorted(unpriced),
     }
 
@@ -160,3 +210,8 @@ def get(force=False):
             _state["result"] = _aggregate(_scan())
             _state["at"] = time.time()
         return _state["result"]
+
+
+def peek():
+    """集計済みの結果を返す（まだ無ければ None）。集計を待たない"""
+    return _state["result"]
