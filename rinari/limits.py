@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 
 from . import __version__
-from .paths import credentials_path
+from .paths import cache_dir, credentials_path
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
@@ -22,10 +22,76 @@ USER_AGENT = f"Rinari/{__version__}"
 
 CACHE_SECONDS = 60       # 通常の取得間隔の下限
 FORCE_MIN_SECONDS = 15   # 「今すぐ更新」でもこれより短い間隔では取りに行かない
+POLL_SECONDS = 5 * 60    # 画面を開いていなくても記録のために取得する間隔
+HISTORY_KEEP_SECONDS = 35 * 24 * 3600  # 記録を残す期間
 
 _cred_lock = threading.Lock()
 _cache_lock = threading.Lock()
+_history_lock = threading.Lock()
 _cache = {"at": 0.0, "data": None}
+
+
+def _history_path():
+    return cache_dir() / "limits-history.jsonl"
+
+
+def _append_history(result):
+    """取得した使用率を1行1件で追記する（利用上限 API は過去の値を返さないため手元に貯める）"""
+    entry = {
+        "t": round(result["fetchedAt"], 1),
+        "limits": [{"kind": x["kind"], "label": x["label"], "percent": x["percent"], "resetsAt": x["resetsAt"]}
+                   for x in result["limits"]],
+    }
+    with _history_lock:
+        try:
+            with open(_history_path(), "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
+
+def history(days=8):
+    """直近 days 日分の記録を返す。古すぎる記録はついでに削る"""
+    now = time.time()
+    since = now - days * 86400
+    path = _history_path()
+    out, keep, dropped = [], [], False
+    with _history_lock:
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()
+        except OSError:
+            return []
+        for line in lines:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                dropped = True
+                continue
+            if e.get("t", 0) < now - HISTORY_KEEP_SECONDS:
+                dropped = True
+                continue
+            keep.append(line)
+            if e["t"] >= since:
+                out.append(e)
+        if dropped:
+            tmp = path.with_suffix(".tmp")
+            try:
+                tmp.write_text("".join(keep), encoding="utf-8")
+                os.replace(tmp, path)
+            except OSError:
+                pass
+    return out
+
+
+def poll_forever():
+    """サーバーが動いている間、一定間隔で取得して記録を貯める"""
+    while True:
+        try:
+            fetch()
+        except Exception:
+            pass
+        time.sleep(POLL_SECONDS)
 
 
 class LimitsError(Exception):
@@ -210,6 +276,9 @@ def fetch(force=False):
             result["error"] = f"通信エラー: {e}"
         except ValueError as e:
             result["error"] = f"応答を読めません: {e}"
+
+        if not result["error"]:
+            _append_history(result)
 
         # エラー時は前回の値を残して表示を続ける
         if result["error"] and _cache["data"] and not _cache["data"].get("error"):

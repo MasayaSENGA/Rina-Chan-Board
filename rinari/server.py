@@ -1,5 +1,7 @@
 import json
 import mimetypes
+import os
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -48,6 +50,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/limits":
             self._json(limits.fetch(force=force))
             return
+        if url.path == "/api/limits/history":
+            self._json({"points": limits.history()})
+            return
         if url.path == "/api/stats":
             self._json(stats.get(force=force))
             return
@@ -65,8 +70,19 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, path.read_bytes(), ctype)
 
 
+class Server(ThreadingHTTPServer):
+    # Windows の SO_REUSEADDR は使用中のポートにも重ねて bind できてしまい、
+    # 2つ目の Rinari が黙って起動するので使わない（代わりに排他で bind する）
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def serve(port):
     # 127.0.0.1 だけで待ち受ける（LAN の他の端末からは見えない）
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    httpd = Server(("127.0.0.1", port), Handler)
     httpd.daemon_threads = True
     return httpd

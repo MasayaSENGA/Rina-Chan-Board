@@ -28,6 +28,7 @@
       <p class="notice" id="limits-error" hidden></p>
       <div class="limit-grid" id="limits"></div>
       <p class="muted small" id="extra-usage" hidden></p>
+      <p class="muted small">推移のグラフは Rinari を起動している間に5分ごとに記録した値です。点線はこれまでのペースが続いた場合の予測です。</p>
     </section>
 
     <section aria-labelledby="models-title">
@@ -44,12 +45,14 @@
             <button type="button" data-v="total" aria-pressed="true">全トークン</button>
             <button type="button" data-v="output">出力トークン</button>
             <button type="button" data-v="messages">応答数</button>
+            <button type="button" data-v="cost">料金換算</button>
           </div>
         </div>
       </div>
-      <p class="muted small">Claude Code（デスクトップアプリの Code タブを含む）の会話ログから集計しています。claude.ai の通常チャットは含みません。</p>
+      <p class="muted small">Claude Code（デスクトップアプリの Code タブを含む）の会話ログから集計しています。claude.ai の通常チャットは含みません。料金換算は同じ量を API で使った場合の目安（USD）で、実際の請求額ではありません。</p>
 
       <div class="card">
+        <div class="stat-row" id="stat-row"></div>
         <div class="share-bar" id="share-bar" role="img"></div>
         <div class="legend" id="legend"></div>
       </div>
@@ -57,6 +60,11 @@
       <div class="card">
         <h3>日別の推移</h3>
         <div class="chart" id="daily"></div>
+      </div>
+
+      <div class="card">
+        <h3>曜日と時間帯</h3>
+        <div class="heatmap" id="heatmap"></div>
       </div>
 
       <div class="card">
@@ -71,6 +79,7 @@
                 <th scope="col" class="num">出力</th>
                 <th scope="col" class="num">キャッシュ作成</th>
                 <th scope="col" class="num">キャッシュ読込</th>
+                <th scope="col" class="num">料金換算</th>
                 <th scope="col" class="num">割合</th>
               </tr>
             </thead>
