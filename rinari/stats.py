@@ -1,4 +1,5 @@
 """Claude Code の会話ログ（projects/**/*.jsonl）からモデル別の使用量を集計する。
+Cowork が手元に残す会話ログ（同じ形式）もあれば「Cowork」というプロジェクトとして加える。
 
 ログは数百MBになるので、ファイルごとの抽出結果を (更新時刻, サイズ) をキーに
 キャッシュし、変わったファイルだけ読み直す。キャッシュはリポジトリの外に置く。
@@ -11,12 +12,15 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from .paths import cache_dir, projects_dir
+from .paths import cache_dir, cowork_dirs, projects_dir
 from .pricing import cache_savings_usd, cost_usd
 
 CACHE_VERSION = 3
 MIN_RESCAN_SECONDS = 30  # 通常の読み直し間隔の下限
 FORCE_MIN_SECONDS = 5    # 「今すぐ更新」でもこれより短い間隔では読み直さない
+BUCKET_SECONDS = 5 * 60  # 利用上限の記録と突き合わせるための料金換算の刻み
+BUCKET_KEEP_SECONDS = 35 * 86400  # 利用上限の記録と同じ期間だけ返す
+COWORK_PROJECT = "Cowork"
 
 _lock = threading.Lock()
 _state = {"at": 0.0, "files": None, "result": None}
@@ -54,7 +58,7 @@ def _user_text(m):
     return c if c and not c.startswith("<") else None
 
 
-def _parse_file(path: Path):
+def _parse_file(path: Path, project_name=None):
     """1ファイルから応答ごとの [id, 時刻(UNIX秒), モデル, プロジェクト, 入力, 出力,
     キャッシュ作成(5分), キャッシュ作成(1時間), キャッシュ読込, fastモード, セッションID] と、
     会話のタイトル（名前を付けていればその名前、無ければ最初の発言）を取り出す"""
@@ -96,7 +100,7 @@ def _parse_file(path: Path):
                 continue
             u = m["usage"]
             cwd = d.get("cwd") or ""
-            project = Path(cwd).name if cwd else path.parent.name
+            project = project_name or (Path(cwd).name if cwd else path.parent.name)
             cc = int(u.get("cache_creation_input_tokens") or 0)
             detail = u.get("cache_creation") if isinstance(u.get("cache_creation"), dict) else {}
             cc1h = int(detail.get("ephemeral_1h_input_tokens") or 0)
@@ -112,27 +116,38 @@ def _parse_file(path: Path):
     return records, (title[:80] if title else None)
 
 
-def _scan():
+def _log_files():
+    """(ファイル, プロジェクト名の上書き) を並べる"""
     root = projects_dir()
-    cached = _state["files"] if _state["files"] is not None else _load_cache()
-    files, changed = {}, False
     if root.exists():
         for p in root.rglob("*.jsonl"):
-            try:
-                st = p.stat()
-            except OSError:
-                continue
-            key = str(p)
-            c = cached.get(key)
-            if c and c["mtime"] == st.st_mtime and c["size"] == st.st_size:
-                files[key] = c
-                continue
-            try:
-                recs, title = _parse_file(p)
-            except OSError:
-                continue
-            files[key] = {"mtime": st.st_mtime, "size": st.st_size, "records": recs, "title": title}
-            changed = True
+            yield p, None
+    for d in cowork_dirs():
+        # セッションごとの .claude/projects/ の下が会話ログ。audit.jsonl など別形式のものは読まない
+        for p in d.rglob("*.jsonl"):
+            if ".claude" in p.parts and "projects" in p.parts:
+                yield p, COWORK_PROJECT
+
+
+def _scan():
+    cached = _state["files"] if _state["files"] is not None else _load_cache()
+    files, changed = {}, False
+    for p, project_name in _log_files():
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        key = str(p)
+        c = cached.get(key)
+        if c and c["mtime"] == st.st_mtime and c["size"] == st.st_size:
+            files[key] = c
+            continue
+        try:
+            recs, title = _parse_file(p, project_name)
+        except OSError:
+            continue
+        files[key] = {"mtime": st.st_mtime, "size": st.st_size, "records": recs, "title": title}
+        changed = True
     if changed or len(files) != len(cached):
         try:
             _save_cache(files)
@@ -149,6 +164,8 @@ def _aggregate(files):
     rows = defaultdict(lambda: [0, 0, 0, 0, 0, 0.0, 0.0])    # (日付, モデル, プロジェクト)
     hours = defaultdict(lambda: [0, 0, 0, 0, 0, 0.0, 0.0])   # (日付, 時, モデル)
     sessions = {}  # セッションID -> {プロジェクト, タイトル, 最初, 最後, モデル -> 値}
+    buckets = defaultdict(float)  # (5分の区切り, モデル) -> 料金換算USD
+    bucket_since = time.time() - BUCKET_KEEP_SECONDS
     unpriced = set()
     first = last = None
     for f in files.values():
@@ -177,6 +194,8 @@ def _aggregate(files):
                 r[4] += cr
                 r[5] += usd
                 r[6] += saved
+            if ts >= bucket_since:
+                buckets[(int(ts // BUCKET_SECONDS) * BUCKET_SECONDS, model)] += usd
             first = ts if first is None or ts < first else first
             last = ts if last is None or ts > last else last
 
@@ -199,6 +218,8 @@ def _aggregate(files):
              {m: vals(v) for m, v in s["models"].items()}]
             for sid, s in sorted(sessions.items(), key=lambda kv: -kv[1]["last"])
         ],
+        "bucketFields": ["t", "model", "costUsd"],
+        "buckets": [[t, m, round(v, 6)] for (t, m), v in sorted(buckets.items()) if v],
         "unpricedModels": sorted(unpriced),
     }
 

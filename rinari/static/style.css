@@ -20,6 +20,8 @@
   --series-7: #6250d6;
   --series-8: #e34948;
   --series-other: #a3a29b;
+  --est-logged: #2a78d6;
+  --est-unlogged: #eb6834;
   --status-normal: #2a78d6;
   --status-warning: #fab219;
   --status-critical: #d03b3b;
@@ -54,6 +56,8 @@
     --series-7: #9085e9;
     --series-8: #e66767;
     --series-other: #6b6a65;
+    --est-logged: #3987e5;
+    --est-unlogged: #d95926;
     --status-normal: #3987e5;
     /* 暗い背景では「多い」ほど明るくする */
     --seq-1: #104281;
@@ -86,6 +90,8 @@
   --series-7: #9085e9;
   --series-8: #e66767;
   --series-other: #6b6a65;
+  --est-logged: #3987e5;
+  --est-unlogged: #d95926;
   --status-normal: #3987e5;
   --seq-1: #104281;
   --seq-2: #1c5cab;
@@ -286,6 +292,26 @@ td.num, th.num { text-align: right; }
 .mini-bar > span { display: block; height: 100%; }
 .mini-bar.wide { width: 100%; }
 .window-models { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--grid); padding-top: 8px; }
+
+/* 1日あたりの目安 */
+.budget { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--grid); padding-top: 8px; }
+.budget-used { color: var(--text-2); }
+.budget-used.over { color: var(--status-critical); font-weight: 600; }
+.meter.small-bar { height: 6px; }
+
+/* チャット・Cowork の推定 */
+.estimate { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--grid); padding-top: 8px; }
+.hbar.stack { display: flex; gap: 1px; background: none; }
+.hbar.stack > span { border-radius: 0; }
+.hbar.stack > span:first-child { border-radius: 2px 0 0 2px; }
+.hbar.stack > span:last-child { border-radius: 0 2px 2px 0; }
+.hbar.stack > span:only-child { border-radius: 2px; }
+
+/* 5時間枠の始まる時刻 */
+.plan-advice { font-weight: 600; }
+.plan-advice.muted { font-weight: 400; }
+.chart .band { fill: var(--track); opacity: 0.5; }
+.chart .band.alt { opacity: 0.9; }
 
 /* キャッシュ読込率 */
 .rate { display: inline-flex; align-items: center; gap: 8px; }

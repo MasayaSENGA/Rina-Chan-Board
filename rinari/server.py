@@ -71,7 +71,8 @@ class Handler(BaseHTTPRequestHandler):
                 after = int(parse_qs(url.query).get("after", ["0"])[0])
             except ValueError:
                 after = 0
-            self._json({"alerts": notify.since(after), "last": notify.latest_id(), "summary": notify.summary()})
+            self._json({"alerts": notify.since(after), "last": notify.latest_id(), "summary": notify.summary(),
+                        "icon": notify.icon()})
             return
         if url.path == "/api/version":
             self._json({"version": __version__})

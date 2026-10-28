@@ -90,7 +90,11 @@ function modelLabel(id) {
   return fam[0].toUpperCase() + fam.slice(1) + (ver ? " " + ver : "");
 }
 
+// 推定の内訳（記録あり／チャットなど）はモデルとは別の固定色
+const FIXED_COLORS = { logged: "var(--est-logged)", unlogged: "var(--est-unlogged)" };
+
 function colorVar(id) {
+  if (id in FIXED_COLORS) return FIXED_COLORS[id];
   const slot = state.colorOf.get(id);
   return slot ? `var(--series-${slot})` : "var(--series-other)";
 }
@@ -166,8 +170,12 @@ function renderLimits() {
       card.append(el("div", { class: "forecast" + (trend.hits ? " critical" : "") },
         el("span", { class: "forecast-main", text: trend.text }), el("span", { class: "muted", text: trend.basis })));
     }
+    const budget = dailyBudget(item, data.fetchedAt);
+    if (budget) card.append(budget);
     const usage = windowModels(item, data.fetchedAt);
     if (usage) card.append(usage);
+    const est = estimateBox(item, data.fetchedAt);
+    if (est) card.append(est);
     if (item.active) {
       card.append(el("span", { class: "badge active", text: "いま一番効いている枠" }));
     }
@@ -177,6 +185,8 @@ function renderLimits() {
   if (!data.error && !(data.limits || []).length) {
     box.append(el("p", { class: "empty", text: "利用上限の情報がありません" }));
   }
+  renderEstimateDaily();
+  renderSessionPlan();
 
   const ex = data.extraUsage;
   $("extra-usage").hidden = !(ex && ex.enabled && ex.monthlyLimit);
@@ -207,9 +217,7 @@ function windowModels(item, fetchedAt) {
   const reset = Date.parse(item.resetsAt);
   const start = reset - windowLength(item);
   const now = fetchedAt * 1000;
-  // モデル別の週間枠（例: 週間（Fable））はそのモデルだけを数える
-  const only = /^週間（(.+)）$/.exec(item.label)?.[1];
-  const onlyModel = only && only !== "全モデル" ? only.toLowerCase() : null;
+  const onlyModel = scopeModel(item);
   const byModel = new Map();
   let cost = 0;
   for (const r of state.stats.hours) {
@@ -242,9 +250,16 @@ function windowModels(item, fetchedAt) {
     el("div", { class: "small", text: top }));
 }
 
+// モデル別の週間枠（例: 週間（Fable））はそのモデルだけを数える。対象のモデル名（小文字）か null
+function scopeModel(item) {
+  const only = /^週間（(.+)）$/.exec(item.label)?.[1];
+  return only && only !== "全モデル" ? only.toLowerCase() : null;
+}
+
 // ---------- 利用上限の推移と予測 ----------
 
 const HOUR = 3600 * 1000;
+const DAY = 24 * HOUR;
 
 function windowLength(item) {
   return item.kind === "session" || item.group === "session" ? 5 * HOUR : 7 * 24 * HOUR;
@@ -353,12 +368,409 @@ function limitTrend(item, fetchedAt) {
   return { chart: root, text, basis, hits: !!f.hitAt || item.percent >= 100 };
 }
 
+// ---------- 1日あたりの目安（週間枠） ----------
+
+// 週間枠の残りを、リセットまでの日数で均した「今日使ってよい量」
+function dailyBudget(item, fetchedAt) {
+  if (!item.resetsAt || !fetchedAt || windowLength(item) !== 7 * DAY || item.percent >= 100) return null;
+  const now = fetchedAt * 1000;
+  const reset = Date.parse(item.resetsAt);
+  if (reset <= now) return null;
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  const start = reset - windowLength(item);
+  // 今日の始まりの使用率。枠が今日始まったなら 0、そうでなければ今日の最初の記録
+  let base, baseAt;
+  if (start >= midnight.getTime()) [baseAt, base] = [start, 0];
+  else [baseAt, base] = windowPoints(item, fetchedAt).find(([t]) => t >= midnight.getTime());
+  const allowance = (100 - base) / Math.max(1, (reset - midnight) / DAY);
+  const used = Math.max(0, item.percent - base);
+  const ratio = allowance > 0 ? used / allowance : 1;
+  const daysLeft = (reset - now) / DAY;
+  const perDay = (100 - item.percent) / Math.max(1, daysLeft);
+
+  const fill = el("span");
+  fill.style.width = Math.min(100, ratio * 100) + "%";
+  const sev = ratio > 1 ? "critical" : ratio > 0.8 ? "warning" : "normal";
+  const late = baseAt - midnight > 30 * 60 * 1000 && start < midnight;
+  return el("div", { class: "budget" },
+    el("div", { class: "small" },
+      el("span", { text: `今日の目安 約${pct(allowance)}` }),
+      el("span", { class: "budget-used" + (ratio > 1 ? " over" : ""),
+        text: ratio > 1 ? `（今日 +${pct(used)}・目安を超えています）` : `（今日はここまで +${pct(used)}）` })),
+    el("div", { class: "meter small-bar " + sev }, fill),
+    el("div", { class: "small muted", text:
+      (daysLeft < 1
+        ? `リセットまでに使えるのは残り ${pct(100 - item.percent)}`
+        : `残り ${pct(100 - item.percent)} をあと${daysLeft.toFixed(1)}日で均すと1日 約${pct(perDay)}`)
+      + (late ? `（今日の記録は ${fmtTime(new Date(baseAt))} から）` : "") }));
+}
+
+// ---------- チャット・Cowork の推定 ----------
+// 利用上限の % はチャットや Cowork も含む全体の値だが、会話ログには Code（と一部の Cowork）しか残らない。
+// 「会話ログの料金換算で説明できる分」を差し引いた残りを、チャットなど記録のない利用と推定する。
+// 枠の減り方が料金換算にほぼ比例する、という前提の目安。
+
+const costCache = new Map(); // 対象のモデル -> 5分ごとの料金換算の累積
+const CAL_MIN_SEGMENTS = 3;
+
+function costSeries(onlyModel) {
+  const key = onlyModel || "";
+  let s = costCache.get(key);
+  if (s) return s;
+  const byT = new Map();
+  for (const [t, model, v] of state.stats?.buckets || []) {
+    if (onlyModel && !modelLabel(model).toLowerCase().startsWith(onlyModel)) continue;
+    byT.set(t, (byT.get(t) || 0) + v);
+  }
+  const ts = [...byT.keys()].sort((a, b) => a - b);
+  const sum = [0];
+  for (const t of ts) sum.push(sum[sum.length - 1] + byT.get(t));
+  s = { ts: ts.map((t) => t * 1000), sum };
+  costCache.set(key, s);
+  return s;
+}
+
+function lowerBound(arr, x) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (arr[m] < x) lo = m + 1;
+    else hi = m;
+  }
+  return lo;
+}
+
+// a 以上 b 未満に会話ログで使った料金換算（5分刻み）
+function costBetween(s, a, b) {
+  return s.sum[lowerBound(s.ts, b)] - s.sum[lowerBound(s.ts, a)];
+}
+
+// 記録を枠（リセット時刻が同じもの）ごとにまとめる。各枠の点の先頭には始まり（0%）を置く
+function historyWindows(label, length) {
+  const map = new Map();
+  for (const e of state.history) {
+    for (const x of e.limits) {
+      if (x.label !== label || !x.resetsAt) continue;
+      const reset = Date.parse(x.resetsAt);
+      const key = Math.round(reset / (15 * 60 * 1000));
+      let w = map.get(key);
+      if (!w) map.set(key, (w = { reset, pts: [[reset - length, 0]] }));
+      w.pts.push([e.t * 1000, x.percent]);
+    }
+  }
+  for (const w of map.values()) w.pts.sort((a, b) => a[0] - b[0]);
+  return [...map.values()];
+}
+
+// 5時間枠の 1% が週間枠の何% にあたるか。どちらもチャットを含む全体の値なので記録だけで分かる
+function sessionPerWeekly(label) {
+  const SAME = 2 * 60 * 1000;
+  let ds = 0, dw = 0, prev = null;
+  for (const e of state.history) {
+    const s = e.limits.find((x) => x.kind === "session");
+    const w = e.limits.find((x) => x.label === label);
+    const cur = s?.resetsAt && w?.resetsAt ? { s: Date.parse(s.resetsAt), w: Date.parse(w.resetsAt), ps: s.percent, pw: w.percent } : null;
+    if (prev && cur && Math.abs(cur.s - prev.s) < SAME && Math.abs(cur.w - prev.w) < SAME) {
+      ds += Math.max(0, cur.ps - prev.ps);
+      dw += Math.max(0, cur.pw - prev.pw);
+    }
+    prev = cur;
+  }
+  return dw >= 3 ? ds / dw : null;
+}
+
+// 使用率 1% が料金換算でいくらにあたるか（k）。
+// 記録を区間に分け、区間ごとの「料金換算 ÷ 増えた%」を求める。チャットを使った区間は % だけ増えて値が小さくなるので、
+// 大きい方（80パーセンタイル）を Code だけを使ったときの値とみなす。
+function calibrate(item) {
+  const length = windowLength(item);
+  const session = length === 5 * HOUR;
+  const s = costSeries(scopeModel(item));
+  const minSpan = session ? 30 * 60 * 1000 : 6 * HOUR;
+  const minDelta = session ? 3 : 2; // % は整数でしか返らないので、ある程度増えた区間だけを使う
+  const ratios = [];
+  for (const w of historyWindows(item.label, length)) {
+    let a = w.pts[0];
+    for (const b of w.pts.slice(1)) {
+      if (b[0] - a[0] < minSpan || b[1] - a[1] < minDelta) continue;
+      const c = costBetween(s, a[0], b[0]);
+      if (c >= 0.5) ratios.push(c / (b[1] - a[1]));
+      a = b;
+    }
+  }
+  if (ratios.length >= CAL_MIN_SEGMENTS) {
+    ratios.sort((x, y) => x - y);
+    return { k: ratios[Math.floor(0.8 * (ratios.length - 1))], n: ratios.length, from: "self" };
+  }
+  // 週間枠は増え方がゆっくりで区間が集まりにくいので、5時間枠の値から換算する
+  if (!session && !scopeModel(item)) {
+    const sess = (state.limits?.limits || []).find((x) => x.kind === "session");
+    const ks = sess && calibrate(sess);
+    const r = sessionPerWeekly(item.label);
+    if (ks && r) return { k: ks.k * r, n: ks.n, from: "session" };
+  }
+  return null;
+}
+
+function estimate(item, fetchedAt) {
+  if (!item.resetsAt || !fetchedAt || !state.stats?.buckets) return null;
+  const cal = calibrate(item);
+  if (!cal) return { pending: true };
+  const start = Date.parse(item.resetsAt) - windowLength(item);
+  const cost = costBetween(costSeries(scopeModel(item)), start, fetchedAt * 1000);
+  const logged = Math.min(item.percent, cost / cal.k);
+  return { cal, cost, logged, unlogged: Math.max(0, item.percent - logged) };
+}
+
+function calBasis(cal) {
+  return cal.from === "session"
+    ? `1% ≈ ${usd(cal.k)}（5時間枠の推定から換算）`
+    : `1% ≈ ${usd(cal.k)}（Code を使った ${cal.n} 区間から推定）`;
+}
+
+function estimateBox(item, fetchedAt) {
+  const e = estimate(item, fetchedAt);
+  if (!e) return null;
+  if (e.pending) {
+    return el("div", { class: "estimate small muted",
+      text: "チャット・Cowork の推定: Code を使った時間帯の記録が貯まると表示します" });
+  }
+  if (!item.percent) return null;
+  const bar = el("div", { class: "mini-bar wide" });
+  for (const id of ["logged", "unlogged"]) {
+    if (!e[id]) continue;
+    const s = el("span");
+    s.style.flex = `${e[id]} 0 0`;
+    s.style.background = colorVar(id);
+    bar.append(s);
+  }
+  const lines = [
+    ["logged", "記録あり（Code・Cowork）", `${pct(e.logged)}（${usd(e.cost)}）`],
+    ["unlogged", "チャットなど（推定）", pct(e.unlogged)],
+  ];
+  bar.addEventListener("mousemove", (ev) => showTip(ev, "この枠の内訳（推定）", lines));
+  bar.addEventListener("mouseleave", hideTip);
+  const share = (e.unlogged / item.percent) * 100;
+  return el("div", { class: "estimate" },
+    el("div", { class: "small", text: `チャット・Cowork など（推定）: 約${pct(e.unlogged)}（使った分の${Math.round(share)}%）` }),
+    bar,
+    el("div", { class: "small muted", text: calBasis(e.cal) }));
+}
+
+// 週間枠の増え方を日ごとに「記録あり」と「チャットなど」に分ける（直近7日）
+function renderEstimateDaily() {
+  const box = $("estimate-daily");
+  box.replaceChildren();
+  const item = (state.limits?.limits || []).find((x) => x.kind === "weekly_all");
+  const cal = item && state.stats?.buckets ? calibrate(item) : null;
+  if (!cal) {
+    box.append(el("p", { class: "empty", text: item
+      ? "Code を使った時間帯の記録が貯まると表示します（Rinari を起動しているあいだ5分ごとに記録します）"
+      : "週間枠の情報がありません" }));
+    return;
+  }
+  const s = costSeries(null);
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    days.push(localDate(d));
+  }
+  const byDay = new Map(days.map((d) => [d, { delta: 0, cost: 0 }]));
+  // 記録の区間ごとに、増えた% と料金換算を区間の終わりの日に足す。
+  // 長く間が空いた区間（Rinari を止めていた間や、記録を始める前）はどの日の分か分からないので数えない
+  for (const w of historyWindows(item.label, windowLength(item))) {
+    for (let i = 1; i < w.pts.length; i++) {
+      const [a, pa] = w.pts[i - 1], [b, pb] = w.pts[i];
+      const d = byDay.get(localDate(new Date(b)));
+      if (!d || b - a > 12 * HOUR) continue;
+      d.delta += Math.max(0, pb - pa);
+      d.cost += costBetween(s, a, b);
+    }
+  }
+  const rows = days.map((day) => {
+    const d = byDay.get(day);
+    const logged = Math.min(d.delta, d.cost / cal.k);
+    return { day, delta: d.delta, logged, unlogged: d.delta - logged };
+  });
+  const max = Math.max(1, ...rows.map((r) => r.delta));
+  const total = rows.reduce((a, r) => [a[0] + r.delta, a[1] + r.unlogged], [0, 0]);
+
+  box.append(el("p", { class: "small", text: total[0]
+    ? `直近7日で週間枠を ${pct(total[0])} 使い、そのうち約 ${pct(total[1])}（${Math.round((total[1] / total[0]) * 100)}%）がチャット・Cowork など記録のない利用と推定されます。`
+    : "直近7日の記録では、週間枠は増えていません。" }));
+  const table = el("table", { class: "bars-table" });
+  const tbody = el("tbody");
+  for (const r of rows) {
+    const [, mo, da] = r.day.split("-");
+    const label = `${+mo}/${+da}（${WEEKDAYS[new Date(r.day + "T00:00:00").getDay()]}）`;
+    const bar = el("span", { class: "hbar stack" });
+    for (const id of ["logged", "unlogged"]) {
+      if (r[id] <= 0) continue;
+      const seg = el("span");
+      seg.style.width = (r[id] / max) * 100 + "%";
+      seg.style.background = colorVar(id);
+      bar.append(seg);
+    }
+    const lines = [["logged", "記録あり（Code・Cowork）", pct(r.logged)], ["unlogged", "チャットなど（推定）", pct(r.unlogged)]];
+    bar.addEventListener("mousemove", (e) => showTip(e, label, lines, pct(r.delta)));
+    bar.addEventListener("mouseleave", hideTip);
+    tbody.append(el("tr", {},
+      el("td", { text: label }),
+      el("td", { class: "bar-cell" }, bar),
+      el("td", { class: "num", text: r.delta ? `+${pct(r.delta)}` : "-" }),
+      el("td", { class: "num muted", text: r.delta ? `チャットなど ${pct(r.unlogged)}` : "" }),
+    ));
+  }
+  table.append(tbody);
+  const legend = el("div", { class: "legend" });
+  for (const [id, name] of [["logged", "記録あり（Code・Cowork）"], ["unlogged", "チャット・Cowork など（推定）"]]) {
+    const sw = el("span", { class: "swatch" });
+    sw.style.background = colorVar(id);
+    legend.append(el("div", { class: "legend-item" }, sw, el("span", { text: name })));
+  }
+  box.append(el("div", { class: "table-wrap" }, table), legend,
+    el("p", { class: "muted small", text: `週間枠の ${calBasis(cal)}。日ごとの値は Rinari を起動していた間の記録だけを数えています。` }));
+}
+
+// ---------- 5時間枠の始まる時刻 ----------
+// 5時間枠は最初に送ったときから5時間。使い始める前に短いメッセージで枠を始めておくと、
+// 忙しい時間帯の途中でリセットされ、1つの枠に使い方が集中しにくくなる。
+
+const PLAN_MIN_DAYS = 3;
+const PLAN_MIN_USE = 0.5; // 1時間あたりの平均がこれ以上の時間帯を「使う時間」とみなす（5時間枠の%）
+
+// 時間帯ごとの 5時間枠の増え方（1日あたりの平均）。チャットも含む全体の値
+function sessionProfile(weekdaysOnly) {
+  const sum = Array(24).fill(0);
+  const cover = Array.from({ length: 24 }, () => new Set());
+  let prev = null;
+  for (const e of state.history) {
+    const x = e.limits.find((l) => l.kind === "session");
+    if (!x) {
+      prev = null;
+      continue;
+    }
+    const t = e.t * 1000;
+    const d = new Date(t);
+    const wd = d.getDay();
+    // 間が空いた（Rinari を止めていた）ところは、どの時間帯に使ったか分からないので数えない
+    if (prev && t - prev.t <= 15 * 60 * 1000 && (!weekdaysOnly || (wd >= 1 && wd <= 5))) {
+      const same = x.resetsAt && prev.resetsAt && Math.abs(Date.parse(x.resetsAt) - Date.parse(prev.resetsAt)) < 2 * 60 * 1000;
+      sum[d.getHours()] += same ? Math.max(0, x.percent - prev.percent) : x.percent;
+      cover[d.getHours()].add(localDate(d));
+    }
+    prev = { t, percent: x.percent, resetsAt: x.resetsAt };
+  }
+  const days = new Set(cover.flatMap((c) => [...c]));
+  return { u: sum.map((v, h) => (cover[h].size ? v / cover[h].size : 0)), days: days.size };
+}
+
+// 1日の枠の並びを作る。primer の時刻には使っていなくても枠を始める
+function planWindows(u, primer) {
+  const wins = [];
+  let end = 0;
+  for (let h = 0; h < 24; h++) {
+    if (h < end || (h !== primer && u[h] < PLAN_MIN_USE)) continue;
+    wins.push({ start: h, load: u.slice(h, h + 5).reduce((a, b) => a + b, 0) });
+    end = h + 5;
+  }
+  return wins;
+}
+
+const peakOf = (wins) => Math.max(0, ...wins.map((w) => w.load));
+
+function renderSessionPlan() {
+  const box = $("session-plan");
+  box.replaceChildren();
+  let prof = sessionProfile(true), scope = "平日";
+  if (prof.days < PLAN_MIN_DAYS) [prof, scope] = [sessionProfile(false), "毎日"];
+  if (prof.days < PLAN_MIN_DAYS) {
+    box.append(el("p", { class: "empty",
+      text: `Rinari の記録が${PLAN_MIN_DAYS}日分貯まると、時間帯ごとの使い方から提案します（いま${prof.days}日分）` }));
+    return;
+  }
+  const u = prof.u;
+  const base = planWindows(u, null);
+  let best = null;
+  for (let s = 0; s < 24; s++) {
+    const wins = planWindows(u, s);
+    // 同じくらいなら遅い方（使い始めに近い方）を選ぶ
+    if (!best || peakOf(wins) <= peakOf(best.wins) + 0.01) best = { s, wins };
+  }
+  const basePeak = peakOf(base), bestPeak = peakOf(best.wins);
+  const better = basePeak - bestPeak >= 5 && bestPeak <= basePeak * 0.85 && best.wins[0]?.start !== base[0]?.start;
+  const shown = better ? best.wins : base;
+  const hours = (wins) => wins.map((w) => w.start + "時").join("・");
+
+  if (!base.length) {
+    box.append(el("p", { class: "small", text: `${scope}（${prof.days}日分）の記録では、5時間枠をほとんど使っていません。` }));
+  } else {
+    box.append(el("p", { class: "small", text:
+      `いつもの使い方（${scope}・${prof.days}日分の平均）だと、枠は ${hours(base)} に始まり、いちばん多い枠で 5時間枠の約${Math.round(basePeak)}% を使います。`
+      + (basePeak >= 100 ? "上限に達しやすい使い方です。" : "") }));
+    box.append(el("p", { class: "plan-advice" + (better ? "" : " muted"), text: better
+      ? `${best.s}時台に短いメッセージを1つ送って枠を始めておくと、枠は ${hours(best.wins)} に始まり、いちばん多い枠は約${Math.round(bestPeak)}% に下がります。`
+      : "今の始まり方で枠ごとの偏りは小さく、始める時刻をずらしても大きくは変わりません。" }));
+  }
+
+  // 時間帯ごとの平均（棒）と、枠の区切り（帯）
+  const W = 960, H = 140, L = 40, R = 8, T = 8, B = 20;
+  const pw = W - L - R, ph = H - T - B;
+  const maxV = niceMax(Math.max(1, ...u));
+  const x = (h) => L + (h / 24) * pw;
+  const y = (v) => T + ph - (v / maxV) * ph;
+  const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
+    "aria-label": `時間帯ごとの5時間枠の使い方。枠は ${hours(shown)} に始まります` });
+  shown.forEach((w, i) => {
+    root.append(svg("rect", { class: "band" + (i % 2 ? " alt" : ""), x: x(w.start), y: T,
+      width: x(Math.min(24, w.start + 5)) - x(w.start), height: ph }));
+  });
+  for (let i = 0; i <= 2; i++) {
+    const v = (maxV * i) / 2;
+    if (i > 0) root.append(svg("line", { class: "grid", x1: L, x2: W - R, y1: y(v), y2: y(v) }));
+    const t = svg("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" });
+    t.textContent = Math.round(v) + "%";
+    root.append(t);
+  }
+  const step = pw / 24, bw = step * 0.6;
+  u.forEach((v, h) => {
+    const cx = x(h) + step / 2;
+    if (v > 0) {
+      const node = svg("path", { d: roundedTop(cx - bw / 2, y(v), bw, T + ph - y(v), Math.min(3, (T + ph - y(v)) / 2)) });
+      node.style.fill = "var(--series-1)";
+      root.append(node);
+    }
+    if (h % 3 === 0) {
+      const t = svg("text", { x: x(h), y: H - 4, "text-anchor": "middle" });
+      t.textContent = String(h);
+      root.append(t);
+    }
+    const hit = svg("rect", { class: "hit", x: x(h), y: T, width: step, height: ph });
+    hit.addEventListener("mousemove", (e) => {
+      const w = shown.find((w) => h >= w.start && h < w.start + 5);
+      const lines = [[null, "1日あたりの平均", `${pct(v)}`]];
+      if (w) lines.push([null, `${w.start}時に始まる枠の合計`, `約${Math.round(w.load)}%`]);
+      showTip(e, `${h}時台`, lines);
+    });
+    hit.addEventListener("mouseleave", hideTip);
+    root.insertBefore(hit, root.firstChild);
+  });
+  root.append(svg("line", { class: "baseline", x1: L, x2: W - R, y1: T + ph, y2: T + ph }));
+  box.append(el("div", { class: "chart" }, root));
+  box.append(el("p", { class: "muted small", text:
+    "棒は時間帯ごとの5時間枠の増え方（1日あたりの平均、チャットも含む）、帯は" + (better ? "提案どおりに始めたときの" : "いつもの") + "枠です。Rinari を起動していた時間だけを数えています。" }));
+}
+
 // ---------- モデル別の使用割合 ----------
 
 async function loadStats(force = false) {
   try {
     const res = await fetch("/api/stats" + (force ? "?force=1" : ""));
     state.stats = await res.json();
+    costCache.clear();
     assignColors(state.stats.rows);
   } catch (e) {
     state.stats = state.stats || { rows: [] };

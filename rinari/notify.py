@@ -16,6 +16,7 @@ from .paths import cache_dir
 THRESHOLDS = (80, 95)       # 使用率がこれを超えたら知らせる（%）
 FORECAST_MINUTES = 30       # このペースだとこの時間以内に上限に達するなら知らせる
 ERROR_REPEAT = 2            # 取得の失敗がこの回数続いたら知らせる
+RESET_MIN_PERCENT = 50      # リセットを知らせるのは、前の枠をこれ以上使っていたときだけ
 KEEP_ALERTS = 50
 
 _lock = threading.Lock()
@@ -23,25 +24,28 @@ _alerts = []
 _seq = {"n": 0}
 _errors = {"count": 0, "notified": False}
 _fired = None  # 知らせ済みのキー -> 期限（UNIX秒）
+_windows = {}  # 枠の名前 -> [リセット時刻（UNIX秒）, 最後に見た使用率]。リセットを知らせるために覚えておく
 
 
 def _state_path():
     return cache_dir() / "notify-state.json"
 
 
-def _load_fired():
+def _load_state():
+    global _fired, _windows
     try:
         d = json.loads(_state_path().read_text(encoding="utf-8"))
-        return {k: float(v) for k, v in d.get("fired", {}).items()}
-    except (OSError, ValueError, AttributeError):
-        return {}
+        _fired = {k: float(v) for k, v in d.get("fired", {}).items()}
+        _windows = {k: [float(v[0]), float(v[1])] for k, v in d.get("windows", {}).items()}
+    except (OSError, ValueError, AttributeError, TypeError, IndexError):
+        _fired, _windows = {}, {}
 
 
-def _save_fired():
+def _save_state():
     path = _state_path()
     tmp = path.with_suffix(".tmp")
     try:
-        tmp.write_text(json.dumps({"fired": _fired}), encoding="utf-8")
+        tmp.write_text(json.dumps({"fired": _fired, "windows": _windows}, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)
     except OSError:
         pass
@@ -99,6 +103,7 @@ def _check_limits(result):
         win = f"{item['label']}@{round(reset / 900)}"
         p = item["percent"]
         until = reset + 3600
+        _windows[item["label"]] = [reset, p]
         left = f"リセットは {_hm(reset)}"
 
         if p >= 100:
@@ -123,6 +128,17 @@ def _check_limits(result):
                       f"このペースだと {_hm(hit)} ごろ上限に達します（{left}）")
 
 
+def _check_resets(now):
+    """リセット時刻を過ぎた枠を知らせる。取得（5分ごと）を待たずに、トレイが問い合わせるたびに調べる"""
+    for label, (reset, p) in list(_windows.items()):
+        if now < reset:
+            continue
+        del _windows[label]
+        if p >= RESET_MIN_PERCENT:
+            _once(f"{label}@{round(reset / 900)}:reset", reset + 86400, "normal",
+                  f"{label}がリセットされました", f"前の枠は {round(p)}% まで使っていました")
+
+
 def _check_error(result):
     err = result.get("error")
     if not err:
@@ -138,19 +154,28 @@ def _check_error(result):
         _push("critical", "利用上限を取得できません", err)
 
 
-def on_result(result):
+def _update(fn):
+    """状態を読み込んでから fn を呼び、変わっていれば保存する（呼ぶ側で _lock を取る）"""
     global _fired
-    with _lock:
-        if _fired is None:
-            _fired = _load_fired()
-        before = dict(_fired)
+    if _fired is None:
+        _load_state()
+    before = (dict(_fired), {k: list(v) for k, v in _windows.items()})
+    fn()
+    now = time.time()
+    _fired = {k: v for k, v in _fired.items() if v > now}
+    if (_fired, _windows) != before:
+        _save_state()
+
+
+def on_result(result):
+    def run():
         _check_error(result)
         if not result.get("error"):
+            # リセットの通知は、新しい枠で上書きする前に出す
+            _check_resets(result["fetchedAt"])
             _check_limits(result)
-        now = time.time()
-        _fired = {k: v for k, v in _fired.items() if v > now}
-        if _fired != before:
-            _save_fired()
+    with _lock:
+        _update(run)
 
 
 def summary():
@@ -167,8 +192,23 @@ def summary():
     return "Rinari: " + " · ".join(parts) if parts else "Rinari"
 
 
+def icon():
+    """トレイのアイコンに描く使用率。いま一番効いている枠（無ければ一番高い枠）の値"""
+    data = limits.last()
+    items = (data or {}).get("limits") or []
+    if not items:
+        return None
+    item = next((x for x in items if x.get("active")), None) or max(items, key=lambda x: x["percent"])
+    p = item["percent"]
+    level = item.get("severity") if item.get("severity") in ("normal", "warning", "critical") else None
+    if not level:
+        level = "critical" if p >= 90 else "warning" if p >= 70 else "normal"
+    return {"percent": round(p), "level": level, "label": item["label"]}
+
+
 def since(after):
     with _lock:
+        _update(lambda: _check_resets(time.time()))
         return [a for a in _alerts if a["id"] > after]
 
 

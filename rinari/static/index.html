@@ -32,7 +32,22 @@
         <p class="notice" id="limits-error" hidden></p>
         <div class="limit-grid" id="limits"></div>
         <p class="muted small" id="extra-usage" hidden></p>
-        <p class="muted small">推移のグラフは Rinari を起動している間に5分ごとに記録した値です。点線はこれまでのペースが続いた場合の予測です。「この枠で使ったモデル」は会話ログの料金換算で、枠の減り方の目安です。</p>
+        <p class="muted small">推移のグラフは Rinari を起動している間に5分ごとに記録した値です。点線はこれまでのペースが続いた場合の予測です。「この枠で使ったモデル」は会話ログの料金換算で、枠の減り方の目安です。「今日の目安」は週間枠の残りをリセットまでの日数で均した量です。</p>
+
+        <div class="card" data-fold="estimate">
+          <h3><button type="button" class="fold">チャット・Cowork の利用（推定）</button></h3>
+          <div class="fold-body">
+            <div id="estimate-daily"></div>
+            <p class="muted small">利用上限の % はチャットや Cowork も含む全体の値ですが、パソコンに会話ログが残るのは Code と一部の Cowork だけです。会話ログの料金換算で説明できる分を差し引いた残りを、チャットなど記録のない利用と推定しています。枠の減り方が料金換算にほぼ比例するという前提の目安で、Code だけを使った時間帯の記録が多いほど正確になります。</p>
+          </div>
+        </div>
+
+        <div class="card" data-fold="session-plan">
+          <h3><button type="button" class="fold">5時間枠の始まる時刻</button></h3>
+          <div class="fold-body">
+            <div id="session-plan"></div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -56,7 +71,7 @@
         </div>
       </div>
       <div class="fold-body">
-        <p class="muted small">Claude Code（デスクトップアプリの Code タブを含む）の会話ログから集計しています。claude.ai の通常チャットは含みません。料金換算は同じ量を API で使った場合の目安（USD）で、実際の請求額ではありません。CSV は選んでいる期間の日別・モデル別・プロジェクト別の集計です。</p>
+        <p class="muted small">Claude Code（デスクトップアプリの Code タブを含む）の会話ログから集計しています。Cowork はパソコンに残っている分だけを「Cowork」というプロジェクトとして含みます。claude.ai の通常チャットは含みません。料金換算は同じ量を API で使った場合の目安（USD）で、実際の請求額ではありません。CSV は選んでいる期間の日別・モデル別・プロジェクト別の集計です。</p>
 
         <div class="card" data-fold="summary">
           <h3><button type="button" class="fold">まとめ</button></h3>
