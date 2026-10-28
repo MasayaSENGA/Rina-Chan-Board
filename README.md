@@ -28,6 +28,24 @@ python -m rinari
 
 利用上限は5分ごと、使用割合は1分ごとに自動で更新します。「今すぐ更新」ですぐに取り直せます。同じポートで二重に起動しようとすると、メッセージを出して終了します。
 
+### PC 起動時に自動で起動する
+
+`pythonw.exe` で起動するショートカットを Windows のスタートアップフォルダに置くと、サインイン時にウィンドウを出さずに起動します。PowerShell で次を一度実行します（このフォルダで実行してください）。
+
+```powershell
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Startup'))\Rinari.lnk"); $s.TargetPath = "$env:LOCALAPPDATA\Microsoft\WindowsApps\pythonw.exe"; $s.Arguments = "-m rinari --no-browser"; $s.WorkingDirectory = (Get-Location).Path; $s.Save()
+```
+
+- ブラウザは開かないので、`http://127.0.0.1:8765/` をブックマークしておくと便利です。
+- python.org 版の Python では、`TargetPath` を `pythonw.exe` の実際の場所（`(Get-Command pythonw).Source` で確認）にしてください。
+- ウィンドウが無いので `Ctrl+C` では止められません。止めるときは PowerShell で次を実行します。
+
+```powershell
+Stop-Process -Id (Get-NetTCPConnection -LocalPort 8765 -State Listen).OwningProcess
+```
+
+- 自動起動をやめるときは、`Win+R` で `shell:startup` を開いて `Rinari.lnk` を削除します。
+
 ## 仕組み
 
 - **利用上限**は Claude Code の `/usage` と同じ `https://api.anthropic.com/api/oauth/usage` から取得します。認証には Claude Code のログイン情報（`%USERPROFILE%\.claude\.credentials.json`）を使い、期限切れのときは Claude Code と同じ方法で更新して書き戻します（Claude Code はそのまま使い続けられます）。
