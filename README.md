@@ -21,11 +21,12 @@ Claude の利用上限と、モデル別の使用割合をブラウザで確認�
 各項目は見出しをクリックすると閉じられます（開閉の状態はブラウザに保存されます）。
 
 Python 3.9 以上の標準ライブラリだけで動きます。追加のインストールは要りません。
+exe や PowerShell のスクリプトは使わず、署名済みの `python.exe` / `pythonw.exe` と `.py` ファイルだけで動くので、Windows のスマート アプリ コントロールが有効でも止められません。
 
 ## 使い方
 
 1. 先に Claude Code CLI でログインしておいてください（`claude` を起動して `/login`）。Rinari はそのログイン情報を使います。
-2. `start.bat` をダブルクリックするか、このフォルダで次のコマンドを実行します。
+2. `start.bat` をダブルクリックするか、このフォルダで次のコマンドを実行します（`rinari.pyw` をダブルクリックすると、ウィンドウを出さずに起動します）。
 
 ```bash
 python -m rinari
@@ -38,7 +39,7 @@ python -m rinari
 - ダブルクリック（または右クリック →「ダッシュボードを開く」）でダッシュボードを開きます。
 - アイコンの数字は、いま一番効いている枠（無ければ一番高い枠）の使用率です。70% から黄、90% から赤になります。
 - アイコンにマウスを乗せると、各枠の使用率が出ます。
-- 右クリック →「通知をテスト」で通知の出方を確かめられます。通知が出ないときは、Windows の「設定 → システム → 通知」で「Windows PowerShell」の通知がオンになっているか確認してください（通知は PowerShell 経由で出すため、送信元が Windows PowerShell と表示されます）。
+- 右クリック →「通知をテスト」で通知の出方を確かめられます。通知が出ないときは、Windows の「設定 → システム → 通知」で「Python」の通知がオンになっているか確認してください（通知は Rinari を動かしている Python から出すため、送信元が Python と表示されます）。
 
 | オプション | 内容 |
 |---|---|
@@ -50,21 +51,22 @@ python -m rinari
 
 ### PC 起動時に自動で起動する
 
-`pythonw.exe` で起動するショートカットを Windows のスタートアップフォルダに置くと、サインイン時にウィンドウを出さずに起動します。PowerShell で次を一度実行します（このフォルダで実行してください）。
+このフォルダで次のコマンドを一度実行すると、サインイン時に `pythonw.exe` でウィンドウを出さずに起動します（Windows の「スタートアップ」に Rinari を登録します）。
 
-```powershell
-$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Startup'))\Rinari.lnk"); $s.TargetPath = "$env:LOCALAPPDATA\Microsoft\WindowsApps\pythonw.exe"; $s.Arguments = "-m rinari --no-browser"; $s.WorkingDirectory = (Get-Location).Path; $s.Save()
+```bash
+python -m rinari --startup on
 ```
 
 - ブラウザは開かないので、`http://127.0.0.1:8765/` をブックマークしておくと便利です。
-- python.org 版の Python では、`TargetPath` を `pythonw.exe` の実際の場所（`(Get-Command pythonw).Source` で確認）にしてください。
+- フォルダを移動したときは、もう一度実行して登録し直してください。
 - ウィンドウが無いので `Ctrl+C` では止められません。タスクトレイのアイコンから終了するか、PowerShell で次を実行します。
 
 ```powershell
 Stop-Process -Id (Get-NetTCPConnection -LocalPort 8765 -State Listen).OwningProcess
 ```
 
-- 自動起動をやめるときは、`Win+R` で `shell:startup` を開いて `Rinari.lnk` を削除します。
+- 自動起動をやめるときは、`python -m rinari --startup off` を実行します（「設定 → アプリ → スタートアップ」でオフにしても止まります）。
+- 以前の手順でスタートアップフォルダに `Rinari.lnk` を置いた場合は、`Win+R` で `shell:startup` を開いてそれを削除してください（二重に起動しようとしても、2つ目はすぐ終了します）。
 
 ## 仕組み
 
@@ -79,7 +81,8 @@ Stop-Process -Id (Get-NetTCPConnection -LocalPort 8765 -State Listen).OwningProc
 - **今日の目安**: 今日の最初の記録（枠が今日始まったなら 0%）からの残りを、今日の 0時からリセットまでの日数で割った量です。
 - **5時間枠の始まる時刻**: 5時間枠は最初に送ったときから5時間です。記録した5時間枠の増え方を時間帯ごとに平均し（平日が3日分以上あれば平日だけ）、0〜23時のどこかで枠を始めておいた場合の枠の並びを試して、いちばん多く使う枠の量が一番小さくなる時刻を探します。今の始まり方より15%以上かつ5ポイント以上下がるときだけ提案します。
 - **通知**: 利用上限を取得するたび（5分ごと）に使用率と予測を調べます。同じ枠で同じ通知は一度だけ出し、出した記録を `%LOCALAPPDATA%\Rinari\notify-state.json` に残すので、再起動しても繰り返しません。予測は直近のペース（5時間枠は直近1時間、週間枠は直近24時間）で計算し、記録が足りないうちは予測の通知を出しません。リセットの通知はトレイが30秒ごとに問い合わせるときに調べるので、リセット時刻から1分以内に出ます。しきい値は [rinari/notify.py](rinari/notify.py) の先頭で変えられます。
-- **タスクトレイ**は Windows 標準の PowerShell（WinForms）で表示します（[rinari/tray.ps1](rinari/tray.ps1)）。追加のインストールは要りません。Rinari が終了するとアイコンも消えます。
+- **タスクトレイ**は Rinari の中から Windows の API（Shell_NotifyIcon）を `ctypes` で直接呼んで表示します（[rinari/tray.py](rinari/tray.py)）。別のプログラムやスクリプトを起動しないので、追加のインストールは要らず、スマート アプリ コントロールの対象にもなりません。Rinari が終了するとアイコンも消えます。
+- **自動起動**（`--startup on`）は、`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` に `pythonw.exe "このフォルダ\rinari.pyw" --no-browser` を書き込みます。
 - **会話別**の値は会話全体の合計で、選んだ期間に最後に使った会話を並べます。タイトルは Claude Code で付けた名前、無ければ最初の発言です。
 - **キャッシュの節約額**は、キャッシュ読込を通常の入力単価で払った場合との差から、キャッシュ作成の割増し分（5分: 1.25倍、1時間: 2倍）を差し引いた額です。
 - Microsoft Store 版の Python では、`%LOCALAPPDATA%` への書き込みが `%LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.*\LocalCache\Local\Rinari` に振り替えられます。
@@ -88,7 +91,7 @@ Stop-Process -Id (Get-NetTCPConnection -LocalPort 8765 -State Listen).OwningProc
 
 - サーバーは `127.0.0.1` だけで待ち受けます。同じネットワークの他の端末からは見えません。
 - `127.0.0.1` / `localhost` 以外の Host ヘッダーの要求は拒否します（DNS リバインディング対策）。
-- 終了の操作（`/api/shutdown`）と通知の受け取り（`/api/alerts`）は、起動のたびに作る合言葉を知っているタスクトレイのアイコンからしか受け付けません。ブラウザで開いた他のサイトから Rinari を終了させることはできません。
+- 終了の操作と通知の受け渡しは Rinari の中だけで行い、HTTP では受け付けません。ブラウザで開いた他のサイトから Rinari を終了させることはできません。
 - アクセストークンはブラウザへの応答に含めません。送信先は `api.anthropic.com`（使用状況の取得）と `platform.claude.com`（トークン更新）だけです。
 - 画面は外部の CDN などを読み込みません。
 
