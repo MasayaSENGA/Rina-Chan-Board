@@ -13,7 +13,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = f"Rinari/{__version__}"
+    server_version = f"Rina_Chan_Board/{__version__}"
 
     def log_message(self, fmt, *args):
         pass  # アクセスログは出さない
@@ -76,7 +76,7 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(ThreadingHTTPServer):
     # Windows の SO_REUSEADDR は使用中のポートにも重ねて bind できてしまい、
-    # 2つ目の Rinari が黙って起動するので使わない（代わりに排他で bind する）
+    # 2つ目の璃奈ちゃんボードが黙って起動するので使わない（代わりに排他で bind する）
     allow_reuse_address = os.name != "nt"
 
     def server_bind(self):

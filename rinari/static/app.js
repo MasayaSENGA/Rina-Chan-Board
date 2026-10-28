@@ -115,7 +115,7 @@ async function loadLimits(force = false) {
     const h = await fetch("/api/limits/history");
     state.history = (await h.json()).points || [];
   } catch (e) {
-    state.limits = { error: "Rinari のサーバーに接続できません（起動しているか確認してください）", limits: [] };
+    state.limits = { error: "璃奈ちゃんボードのサーバーに接続できません（起動しているか確認してください）", limits: [] };
   }
   renderLimits();
 }
@@ -200,7 +200,7 @@ function renderLimits() {
 function updateTitle(data) {
   const s = (data.limits || []).find((x) => x.kind === "session") || (data.limits || [])[0];
   if (!s || data.error && !data.stale) {
-    document.title = "Rinari";
+    document.title = "璃奈ちゃんボード";
     return;
   }
   let left = "";
@@ -208,7 +208,7 @@ function updateTitle(data) {
     const m = Math.max(0, Math.round((Date.parse(s.resetsAt) - Date.now()) / 60000));
     left = m >= 1440 ? `・あと${Math.floor(m / 1440)}日` : `・あと${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
   }
-  document.title = `${Math.round(s.percent)}%${left} | Rinari`;
+  document.title = `${Math.round(s.percent)}%${left} | 璃奈ちゃんボード`;
 }
 
 // 枠の期間（始まり〜今）に会話ログで使ったモデルの内訳（料金換算）
@@ -566,7 +566,7 @@ function renderEstimateDaily() {
   const cal = item && state.stats?.buckets ? calibrate(item) : null;
   if (!cal) {
     box.append(el("p", { class: "empty", text: item
-      ? "Code を使った時間帯の記録が貯まると表示します（Rinari を起動しているあいだ5分ごとに記録します）"
+      ? "Code を使った時間帯の記録が貯まると表示します（璃奈ちゃんボードを起動しているあいだ5分ごとに記録します）"
       : "週間枠の情報がありません" }));
     return;
   }
@@ -580,7 +580,7 @@ function renderEstimateDaily() {
   }
   const byDay = new Map(days.map((d) => [d, { delta: 0, cost: 0 }]));
   // 記録の区間ごとに、増えた% と料金換算を区間の終わりの日に足す。
-  // 長く間が空いた区間（Rinari を止めていた間や、記録を始める前）はどの日の分か分からないので数えない
+  // 長く間が空いた区間（璃奈ちゃんボードを止めていた間や、記録を始める前）はどの日の分か分からないので数えない
   for (const w of historyWindows(item.label, windowLength(item))) {
     for (let i = 1; i < w.pts.length; i++) {
       const [a, pa] = w.pts[i - 1], [b, pb] = w.pts[i];
@@ -632,7 +632,7 @@ function renderEstimateDaily() {
     legend.append(el("div", { class: "legend-item" }, sw, el("span", { text: name })));
   }
   box.append(el("div", { class: "table-wrap" }, table), legend,
-    el("p", { class: "muted small", text: `週間枠の ${calBasis(cal)}。日ごとの値は Rinari を起動していた間の記録だけを数えています。` }));
+    el("p", { class: "muted small", text: `週間枠の ${calBasis(cal)}。日ごとの値は璃奈ちゃんボードを起動していた間の記録だけを数えています。` }));
 }
 
 // ---------- 5時間枠の始まる時刻 ----------
@@ -656,7 +656,7 @@ function sessionProfile(weekdaysOnly) {
     const t = e.t * 1000;
     const d = new Date(t);
     const wd = d.getDay();
-    // 間が空いた（Rinari を止めていた）ところは、どの時間帯に使ったか分からないので数えない
+    // 間が空いた（璃奈ちゃんボードを止めていた）ところは、どの時間帯に使ったか分からないので数えない
     if (prev && t - prev.t <= 15 * 60 * 1000 && (!weekdaysOnly || (wd >= 1 && wd <= 5))) {
       const same = x.resetsAt && prev.resetsAt && Math.abs(Date.parse(x.resetsAt) - Date.parse(prev.resetsAt)) < 2 * 60 * 1000;
       sum[d.getHours()] += same ? Math.max(0, x.percent - prev.percent) : x.percent;
@@ -689,7 +689,7 @@ function renderSessionPlan() {
   if (prof.days < PLAN_MIN_DAYS) [prof, scope] = [sessionProfile(false), "毎日"];
   if (prof.days < PLAN_MIN_DAYS) {
     box.append(el("p", { class: "empty",
-      text: `Rinari の記録が${PLAN_MIN_DAYS}日分貯まると、時間帯ごとの使い方から提案します（いま${prof.days}日分）` }));
+      text: `璃奈ちゃんボードの記録が${PLAN_MIN_DAYS}日分貯まると、時間帯ごとの使い方から提案します（いま${prof.days}日分）` }));
     return;
   }
   const u = prof.u;
@@ -761,7 +761,7 @@ function renderSessionPlan() {
   root.append(svg("line", { class: "baseline", x1: L, x2: W - R, y1: T + ph, y2: T + ph }));
   box.append(el("div", { class: "chart" }, root));
   box.append(el("p", { class: "muted small", text:
-    "棒は時間帯ごとの5時間枠の増え方（1日あたりの平均、チャットも含む）、帯は" + (better ? "提案どおりに始めたときの" : "いつもの") + "枠です。Rinari を起動していた時間だけを数えています。" }));
+    "棒は時間帯ごとの5時間枠の増え方（1日あたりの平均、チャットも含む）、帯は" + (better ? "提案どおりに始めたときの" : "いつもの") + "枠です。璃奈ちゃんボードを起動していた時間だけを数えています。" }));
 }
 
 // ---------- モデル別の使用割合 ----------
@@ -1327,7 +1327,7 @@ function periodSuffix() {
 }
 
 $("export-rows").addEventListener("click", () => {
-  downloadCsv(`rinari-usage_${periodSuffix()}.csv`,
+  downloadCsv(`璃奈ちゃんボード-usage_${periodSuffix()}.csv`,
     ["日付", "モデル", "プロジェクト", "応答数", "入力", "出力", "キャッシュ作成", "キャッシュ読込", "料金換算USD", "キャッシュ節約USD"],
     filteredRows());
 });
@@ -1339,7 +1339,7 @@ $("export-sessions").addEventListener("click", () => {
       lines.push([id, project, title || "", fmtIso(first), fmtIso(last), model, ...m]);
     }
   }
-  downloadCsv(`rinari-sessions_${periodSuffix()}.csv`,
+  downloadCsv(`璃奈ちゃんボード-sessions_${periodSuffix()}.csv`,
     ["会話ID", "プロジェクト", "タイトル", "開始", "最終", "モデル", "応答数", "入力", "出力", "キャッシュ作成", "キャッシュ読込", "料金換算USD", "キャッシュ節約USD"],
     lines);
 });
@@ -1358,7 +1358,7 @@ async function loadHealth() {
   try {
     issues = (await (await fetch("/api/health")).json()).issues || [];
   } catch (e) {
-    issues = [{ level: "critical", text: "Rinari のサーバーに接続できません（起動しているか確認してください）" }];
+    issues = [{ level: "critical", text: "璃奈ちゃんボードのサーバーに接続できません（起動しているか確認してください）" }];
   }
   const box = $("health");
   box.replaceChildren(...issues.map((x) =>

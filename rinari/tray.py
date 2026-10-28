@@ -1,9 +1,9 @@
 """タスクトレイのアイコン（Windows のみ）。Win32 API を ctypes で直接呼ぶ（追加のインストールは不要）
 
-Rinari と同じプロセスの別スレッドで動かす。PowerShell のスクリプトや exe を使わないので、
+璃奈ちゃんボードと同じプロセスの別スレッドで動かす。PowerShell のスクリプトや exe を使わないので、
 スマート アプリ コントロールで止められない（動くのは署名済みの python.exe / pythonw.exe だけ）。
 - 左ダブルクリック / メニュー: ダッシュボードを開く
-- Rinari の通知を Windows の通知として出す
+- 璃奈ちゃんボードの通知を Windows の通知として出す
 - アイコンに使用率の数字を描く（いま一番効いている枠。70% から黄、90% から赤）
 """
 
@@ -267,11 +267,11 @@ class Tray:
             raise OSError(ctypes.get_last_error())
         # エクスプローラーが再起動したときにアイコンを出し直す
         self.taskbar_created = user32.RegisterWindowMessageW("TaskbarCreated")
-        self.hwnd = user32.CreateWindowExW(0, "RinariTray", "Rinari", 0, 0, 0, 0, 0, None, None, self.hinst, None)
+        self.hwnd = user32.CreateWindowExW(0, "RinariTray", "璃奈ちゃんボード", 0, 0, 0, 0, 0, None, None, self.hinst, None)
         if not self.hwnd:
             raise OSError(ctypes.get_last_error())
         self.hicon = _rinari_icon()
-        self._notify(NIM_ADD, NIF_MESSAGE | NIF_ICON | NIF_TIP, tip="Rinari")
+        self._notify(NIM_ADD, NIF_MESSAGE | NIF_ICON | NIF_TIP, tip="璃奈ちゃんボード")
         # 起動直後に一度見て、あとは30秒ごと
         user32.SetTimer(self.hwnd, TIMER_FIRST, 3000, None)
         user32.SetTimer(self.hwnd, TIMER_POLL, 30000, None)
@@ -325,7 +325,7 @@ class Tray:
         user32.AppendMenuW(menu, 0, ID_OPEN, "ダッシュボードを開く")
         user32.AppendMenuW(menu, 0, ID_TEST, "通知をテスト")
         user32.AppendMenuW(menu, 0x800, 0, None)  # MF_SEPARATOR
-        user32.AppendMenuW(menu, 0, ID_QUIT, "Rinari を終了")
+        user32.AppendMenuW(menu, 0, ID_QUIT, "璃奈ちゃんボードを終了")
         user32.SetMenuDefaultItem(menu, ID_OPEN, False)  # 太字にする
         pt = wintypes.POINT()
         user32.GetCursorPos(ctypes.byref(pt))
@@ -337,7 +337,7 @@ class Tray:
         if cmd == ID_OPEN:
             self._open()
         elif cmd == ID_TEST:
-            self._notify(NIM_MODIFY, NIF_INFO, title="Rinari", body="通知はこのように表示されます")
+            self._notify(NIM_MODIFY, NIF_INFO, title="璃奈ちゃんボード", body="通知はこのように表示されます")
         elif cmd == ID_QUIT:
             threading.Thread(target=self.on_quit, daemon=True).start()
             user32.DestroyWindow(self.hwnd)
@@ -364,7 +364,7 @@ class Tray:
         order = {"critical": 0, "warning": 1}
         top = min(alerts, key=lambda a: order.get(a.get("level"), 2))
         lines = [(a.get("body") if a is top else a.get("title")) for a in alerts]
-        self._notify(NIM_MODIFY, NIF_INFO, title=str(top.get("title") or "Rinari"),
+        self._notify(NIM_MODIFY, NIF_INFO, title=str(top.get("title") or "璃奈ちゃんボード"),
                      body="\n".join(str(x) for x in lines if x), level=top.get("level"))
 
 

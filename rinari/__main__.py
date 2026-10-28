@@ -48,10 +48,10 @@ def main():
     try:
         httpd = serve(args.port)
     except OSError:
-        print(f"ポート {args.port} は使用中です。Rinari がすでに起動していれば {url} を開いてください。"
+        print(f"ポート {args.port} は使用中です。璃奈ちゃんボードがすでに起動していれば {url} を開いてください。"
               "別のポートで起動するときは --port を指定してください。")
         sys.exit(1)
-    print(f"Rinari {__version__}: {url}  （終了は Ctrl+C か、タスクトレイのアイコンから）")
+    print(f"璃奈ちゃんボード {__version__}: {url}  （終了は Ctrl+C か、タスクトレイのアイコンから）")
     # 初回の集計は時間がかかるので先に始めておく
     threading.Thread(target=stats.get, daemon=True).start()
     # 画面を開いていなくても利用上限の推移を記録する

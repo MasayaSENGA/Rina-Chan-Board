@@ -1,7 +1,7 @@
 """利用上限の通知。取得のたびに使用率と予測を調べ、知らせることがあれば溜めておく。
 
 溜めた通知はタスクトレイ（tray.py）が受け取り、Windows の通知として出す。
-同じ枠・同じ内容では一度しか知らせない（Rinari を再起動しても繰り返さないよう記録を残す）。
+同じ枠・同じ内容では一度しか知らせない（璃奈ちゃんボードを再起動しても繰り返さないよう記録を残す）。
 """
 
 import json
@@ -182,14 +182,14 @@ def summary():
     """トレイのツールチップ用の短い要約（例: 5時間 42% · 週 63%）"""
     data = limits.last()
     if not data:
-        return "Rinari"
+        return "璃奈ちゃんボード"
     if data.get("error") and not data.get("limits"):
-        return "Rinari: 取得できません"
+        return "璃奈ちゃんボード: 取得できません"
     parts = []
     for x in data["limits"]:
         name = "5時間" if x.get("kind") == "session" else x["label"].replace("週間（全モデル）", "週").replace("週間", "週")
         parts.append(f"{name} {round(x['percent'])}%")
-    return "Rinari: " + " · ".join(parts) if parts else "Rinari"
+    return "璃奈ちゃんボード: " + " · ".join(parts) if parts else "璃奈ちゃんボード"
 
 
 def icon():

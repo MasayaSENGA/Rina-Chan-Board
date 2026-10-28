@@ -48,5 +48,5 @@ def check(started_at, tray=None):
                        + ", ".join(s["unpricedModels"]) + "（rinari/pricing.py に追加してください）"})
 
     if tray is not None and tray.poll() is not None:
-        issues.append({"level": "info", "text": "タスクトレイのアイコンが終了しています（通知は出ません。Rinari を再起動すると戻ります）"})
+        issues.append({"level": "info", "text": "タスクトレイのアイコンが終了しています（通知は出ません。璃奈ちゃんボードを再起動すると戻ります）"})
     return issues

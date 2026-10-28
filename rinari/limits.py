@@ -18,7 +18,7 @@ from .paths import cache_dir, credentials_path
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # Claude Code の公開クライアントID
-USER_AGENT = f"Rinari/{__version__}"
+USER_AGENT = f"Rina_Chan_Board/{__version__}"
 
 CACHE_SECONDS = 60       # 通常の取得間隔の下限
 FORCE_MIN_SECONDS = 15   # 「今すぐ更新」でもこれより短い間隔では取りに行かない
