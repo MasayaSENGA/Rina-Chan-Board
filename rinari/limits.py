@@ -257,15 +257,45 @@ def _normalize(raw):
                     "resetsAt": w.get("resets_at"), "active": False,
                 })
 
-    extra = raw.get("extra_usage") if isinstance(raw.get("extra_usage"), dict) else None
+    return {"limits": limits, "extraUsage": _extra_usage(raw)}
+
+
+def _money(m):
+    """{amount_minor, exponent} を通貨単位の数値にする（10000, 2 → 100.0）"""
+    if not isinstance(m, dict) or m.get("amount_minor") is None:
+        return None
+    return float(m["amount_minor"]) / (10 ** int(m.get("exponent") or 0))
+
+
+def _extra_usage(raw):
+    """追加クレジット（プランの上限を超えたときに使う分）。金額は通貨単位に直して返す"""
+    spend = raw.get("spend") if isinstance(raw.get("spend"), dict) else None
+    extra = raw.get("extra_usage") if isinstance(raw.get("extra_usage"), dict) else {}
+    if spend:
+        used, limit = _money(spend.get("used")), _money(spend.get("limit"))
+        currency = (spend.get("used") or {}).get("currency") or (spend.get("limit") or {}).get("currency")
+        enabled = bool(spend.get("enabled"))
+        percent, severity = spend.get("percent"), spend.get("severity")
+    elif extra:
+        # spend が無い形式: used_credits / monthly_limit は最小単位（セント）
+        scale = 10 ** int(extra.get("decimal_places") or 2)
+        used = float(extra["used_credits"]) / scale if extra.get("used_credits") is not None else None
+        limit = float(extra["monthly_limit"]) / scale if extra.get("monthly_limit") is not None else None
+        currency, enabled = extra.get("currency"), bool(extra.get("is_enabled"))
+        percent, severity = extra.get("utilization"), None
+    else:
+        return None
+    if percent is None and used is not None and limit:
+        percent = used / limit * 100
     return {
-        "limits": limits,
-        "extraUsage": {
-            "enabled": bool(extra.get("is_enabled")),
-            "usedCredits": extra.get("used_credits"),
-            "monthlyLimit": extra.get("monthly_limit"),
-            "currency": extra.get("currency"),
-        } if extra else None,
+        "enabled": enabled,
+        "used": used,
+        "limit": limit,
+        "currency": currency or "USD",
+        "percent": float(percent) if percent is not None else None,
+        "severity": severity,
+        "limitReached": bool(extra.get("spend_limit_reached")),
+        "disabledReason": (spend or {}).get("disabled_reason") or extra.get("disabled_reason"),
     }
 
 

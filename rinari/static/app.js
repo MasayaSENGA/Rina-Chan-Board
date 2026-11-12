@@ -188,12 +188,41 @@ function renderLimits() {
   renderEstimateDaily();
   renderSessionPlan();
 
-  const ex = data.extraUsage;
-  $("extra-usage").hidden = !(ex && ex.enabled && ex.monthlyLimit);
-  if (ex && ex.enabled && ex.monthlyLimit) {
-    $("extra-usage").textContent = `追加使用量: ${ex.usedCredits ?? 0} / ${ex.monthlyLimit} ${ex.currency || ""}`;
-  }
+  const extra = extraUsageCard(data.extraUsage);
+  $("extra-usage").replaceChildren(...(extra ? [extra] : []));
   updateStamp();
+}
+
+function fmtMoney(v, currency) {
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: currency || "USD" }).format(v ?? 0);
+  } catch (e) {
+    return `${(v ?? 0).toFixed(2)} ${currency || ""}`;
+  }
+}
+
+// 追加クレジット（プランの上限に達したあとに使われる分）のカード
+function extraUsageCard(ex) {
+  if (!ex || !ex.enabled || !ex.limit) return null;
+  const percent = ex.percent ?? 0;
+  const sev = ex.limitReached ? "critical" : severityOf({ severity: ex.severity, percent });
+  const fill = el("span");
+  fill.style.width = Math.min(100, Math.max(0, percent)) + "%";
+  const meter = el("div", {
+    class: "meter " + sev, role: "meter", "aria-valuemin": "0", "aria-valuemax": "100",
+    "aria-valuenow": String(percent), "aria-label": "追加クレジット",
+  }, fill);
+  const head = el("div", { class: "limit-head" },
+    el("span", { class: "limit-label", text: "追加クレジット（月間）" }),
+    el("span", { class: "badge " + sev }, el("span", { class: "dot" }), ex.limitReached ? "上限に到達" : SEVERITY_TEXT[sev]),
+  );
+  const value = el("div", { class: "limit-value" }, fmtMoney(ex.used, ex.currency),
+    el("small", { text: ` / ${fmtMoney(ex.limit, ex.currency)}` }));
+  const note = ex.limitReached
+    ? "月の上限に達しました。プランの枠がリセットされるまで追加では使えません"
+    : `残り ${fmtMoney(Math.max(0, ex.limit - (ex.used ?? 0)), ex.currency)}（${Math.round(percent)}% 使用）・プランの枠を使い切ったときに使われます`;
+  return el("div", { class: "limit wide" }, head, el("div", { class: "wide-row" }, value, meter),
+    el("div", { class: "limit-reset", text: note }));
 }
 
 // タブのタイトルに 5時間枠の使用率とリセットまでの時間を出す（タブを見るだけで分かるように）

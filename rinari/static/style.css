@@ -186,6 +186,12 @@ footer { max-width: 1120px; margin: 0 auto; padding: 0 24px 32px; }
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
   display: flex; flex-direction: column; gap: 8px;
 }
+/* 追加クレジット: 枠のカードの下に横長で置く */
+#extra-usage:not(:empty) { margin-top: 16px; }
+.limit.wide .limit-head { justify-content: flex-start; }
+.wide-row { display: flex; align-items: center; gap: 16px; }
+.wide-row .limit-value { white-space: nowrap; }
+.wide-row .meter { flex: 1; }
 .limit-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .limit-label { font-weight: 600; color: var(--text-2); }
 .limit-value { font-size: 32px; font-weight: 600; line-height: 1.1; }
