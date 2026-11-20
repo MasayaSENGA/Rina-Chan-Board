@@ -75,6 +75,7 @@ Stop-Process -Id (Get-NetTCPConnection -LocalPort 8765 -State Listen).OwningProc
 ## 仕組み
 
 - **利用上限**は Claude Code の `/usage` と同じ `https://api.anthropic.com/api/oauth/usage` から取得します。認証には Claude Code のログイン情報（`%USERPROFILE%\.claude\.credentials.json`）を使い、期限切れのときは Claude Code と同じ方法で更新して書き戻します（Claude Code はそのまま使い続けられます）。
+- **Claude Meter との共有**: 同じ PC で Claude Meter も動かすと、それぞれが利用上限を取得して取得回数の上限（HTTP 429）に達しやすくなります。璃奈ちゃんボードは取得した応答を `http://127.0.0.1:8765/api/limits/shared` で渡すので、Claude Meter は璃奈ちゃんボードが起動していればそこから受け取り、自分では取得しません（璃奈ちゃんボードが起動していなければ、Claude Meter は単体で取得します）。渡すのは使用率などの数値だけで、トークンは含みません。
 - **モデル別の使用割合**は Claude Code の会話ログ（`%USERPROFILE%\.claude\projects\**\*.jsonl`）から集計します。同じ応答が複数行に記録されるので、メッセージIDで重複を除いています。
 - Claude デスクトップアプリの Cowork が手元に残す会話ログ（`%LOCALAPPDATA%\Claude-Data\*\local-agent-mode-sessions\**\.claude\projects\**\*.jsonl`）も、「Cowork」というプロジェクトとして集計に加えます。残っているのは一部のセッションだけなので、Cowork の利用をすべては表しません。
 - 環境変数 `CLAUDE_CONFIG_DIR` を設定している場合は、`.claude` の代わりにそのフォルダを使います。

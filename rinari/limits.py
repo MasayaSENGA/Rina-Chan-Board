@@ -28,7 +28,7 @@ HISTORY_KEEP_SECONDS = 35 * 24 * 3600  # 記録を残す期間
 _cred_lock = threading.Lock()
 _cache_lock = threading.Lock()
 _history_lock = threading.Lock()
-_cache = {"at": 0.0, "data": None}
+_cache = {"at": 0.0, "data": None, "raw": None, "rawAt": None}
 _listeners = []          # 新しく取得するたびに結果を渡す先（通知など）
 _last_success = {"at": None}
 
@@ -104,6 +104,20 @@ def on_result(fn):
 def last():
     """直近の取得結果（まだ無ければ None）。取得しに行かない"""
     return _cache["data"]
+
+
+def shared(force=False):
+    """他のアプリ（Claude Meter など）に渡す用。直近に取得できた応答をそのまま返す。
+    同じ PC の複数のアプリがそれぞれ取得すると取得回数の上限に達しやすいので、ここで1か所にまとめる。
+    応答は使用率などの数値だけで、トークンは含まない"""
+    data = fetch(force=force)
+    return {
+        "app": "rina-chan-board",
+        "version": __version__,
+        "fetchedAt": _cache["rawAt"],
+        "error": data.get("error"),
+        "raw": _cache["raw"],
+    }
 
 
 def last_success_at():
@@ -319,6 +333,7 @@ def fetch(force=False):
                 token, _ = _access_token(force_refresh=True)
                 raw = _get_usage(token)
             result.update(_normalize(raw))
+            _cache["raw"], _cache["rawAt"] = raw, result["fetchedAt"]
         except LimitsError as e:
             result["error"] = str(e)
         except urllib.error.HTTPError as e:

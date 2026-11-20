@@ -51,6 +51,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/limits":
             self._json(limits.fetch(force=force))
             return
+        if url.path == "/api/limits/shared":
+            self._json(limits.shared(force=force))
+            return
         if url.path == "/api/limits/history":
             self._json({"points": limits.history()})
             return
